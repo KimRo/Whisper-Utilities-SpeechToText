@@ -106,7 +106,17 @@ try {
 Write-Info "PyTorch index: $cudaIndex  ($cudaLabel)"
 
 # --------------------------------------------------------------
-# 4. PyTorch
+# 4. NumPy (must come before PyTorch so its import doesn't warn)
+# --------------------------------------------------------------
+Write-Step "Installing NumPy"
+& $pythonCmd -m pip install numpy --quiet
+if ($LASTEXITCODE -ne 0) { Write-Fail "NumPy install failed (pip exit code $LASTEXITCODE)" }
+$numpyVer = & $pythonCmd -c 'import numpy; print(numpy.__version__)' 2>&1
+if ($LASTEXITCODE -ne 0) { Write-Fail "NumPy installed but import failed: $numpyVer" }
+Write-OK "numpy $numpyVer"
+
+# --------------------------------------------------------------
+# 5. PyTorch
 # --------------------------------------------------------------
 Write-Step "Installing PyTorch (~2 GB for CUDA variant, please wait)"
 & $pythonCmd -m pip install torch --index-url $cudaIndex
@@ -116,7 +126,7 @@ if ($LASTEXITCODE -ne 0) { Write-Fail "PyTorch installed but import failed: $tor
 Write-OK "torch $torchVer"
 
 # --------------------------------------------------------------
-# 5. Python packages
+# 6. Python packages
 # --------------------------------------------------------------
 Write-Step "Installing Python packages"
 
@@ -124,8 +134,7 @@ $packages = @(
     [pscustomobject]@{ name = 'faster-whisper'; imp = 'faster_whisper' },
     [pscustomobject]@{ name = 'sounddevice';    imp = 'sounddevice'    },
     [pscustomobject]@{ name = 'soundfile';      imp = 'soundfile'      },
-    [pscustomobject]@{ name = 'pynput';         imp = 'pynput'         },
-    [pscustomobject]@{ name = 'numpy';          imp = 'numpy'          }
+    [pscustomobject]@{ name = 'pynput';         imp = 'pynput'         }
 )
 
 foreach ($pkg in $packages) {
@@ -138,7 +147,7 @@ foreach ($pkg in $packages) {
 }
 
 # --------------------------------------------------------------
-# 6. Verify all imports
+# 7. Verify all imports
 # --------------------------------------------------------------
 Write-Step "Verifying imports"
 
@@ -170,7 +179,7 @@ if ($LASTEXITCODE -ne 0) { Write-Warn "One or more imports failed - check output
 Remove-Item $verifyFile
 
 # --------------------------------------------------------------
-# 7. Create transcripts folder
+# 8. Create transcripts folder
 # --------------------------------------------------------------
 Write-Step "Creating transcripts folder"
 $transcriptDir = Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'transcripts'
