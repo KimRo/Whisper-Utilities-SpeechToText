@@ -1,0 +1,8 @@
+# Claude Code
+.claude/
+CLAUDE.md
+
+# test files
+*.txt
+*.mp3
+*.wav
