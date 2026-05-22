@@ -1,14 +1,33 @@
 # ==============================================================
-#  Whisper Transcriber - Install Script
-#  Run: powershell -ExecutionPolicy Bypass .\install.ps1
+# Whisper Transcriber - Robust Installer (Final Version)
 # ==============================================================
 
-$ErrorActionPreference = 'Stop'
+$ErrorActionPreference = "Stop"
 
-function Write-Step { param($msg) Write-Host "" ; Write-Host "==> $msg" -ForegroundColor Cyan }
-function Write-OK   { param($msg) Write-Host "    OK   $msg" -ForegroundColor Green }
-function Write-Warn { param($msg) Write-Host "    WARN $msg" -ForegroundColor Yellow }
-function Write-Info { param($msg) Write-Host "    ...  $msg" -ForegroundColor Gray }
+# --------------------------------------------------------------
+# Logging helpers (MUST be first)
+# --------------------------------------------------------------
+function Write-Step {
+    param($msg)
+    Write-Host ""
+    Write-Host "==> $msg" -ForegroundColor Cyan
+}
+
+function Write-OK {
+    param($msg)
+    Write-Host "    OK   $msg" -ForegroundColor Green
+}
+
+function Write-Warn {
+    param($msg)
+    Write-Host "    WARN $msg" -ForegroundColor Yellow
+}
+
+function Write-Info {
+    param($msg)
+    Write-Host "    ...  $msg" -ForegroundColor Gray
+}
+
 function Write-Fail {
     param($msg)
     Write-Host "    FAIL $msg" -ForegroundColor Red
@@ -17,182 +36,235 @@ function Write-Fail {
 
 Write-Host ""
 Write-Host "============================================" -ForegroundColor White
-Write-Host "  Whisper Transcriber - Dependency Setup   " -ForegroundColor White
+Write-Host " Whisper Transcriber Setup" -ForegroundColor White
 Write-Host "============================================" -ForegroundColor White
 
 # --------------------------------------------------------------
-# 1. Python
+# 1. Detect latest installed Python (py launcher preferred)
 # --------------------------------------------------------------
-Write-Step "Checking Python"
+Write-Step "Detecting latest installed Python"
 
-$pythonCmd = $null
-foreach ($cmd in @('python', 'python3')) {
-    try {
-        $ver = & $cmd --version 2>&1
-        if ($ver -match 'Python 3\.(\d+)') {
-            $minor = [int]$Matches[1]
-            if ($minor -ge 10) {
-                $pythonCmd = $cmd
-                Write-OK "$ver"
-                break
-            } else {
-                Write-Warn "$ver found but 3.10+ is required"
-            }
-        }
-    } catch { }
-}
-
-if (-not $pythonCmd) {
-    Write-Info 'Python 3.10+ not found - installing via winget...'
-    try {
-        winget install --id Python.Python.3.13 --source winget --silent --accept-package-agreements --accept-source-agreements
-        $machinePath = [System.Environment]::GetEnvironmentVariable('Path', 'Machine')
-        $userPath    = [System.Environment]::GetEnvironmentVariable('Path', 'User')
-        $env:Path    = $machinePath + ';' + $userPath
-        $pythonCmd   = 'python'
-        Write-OK 'Python 3.13 installed'
-    } catch {
-        Write-Fail 'Could not install Python. Download from https://python.org and re-run this script.'
-    }
-}
-
-# --------------------------------------------------------------
-# 2. pip
-# --------------------------------------------------------------
-Write-Step "Upgrading pip"
-& $pythonCmd -m pip install --upgrade pip --quiet
-if ($LASTEXITCODE -ne 0) { Write-Fail "pip upgrade failed (exit code $LASTEXITCODE)" }
-$pipVer = & $pythonCmd -m pip --version
-Write-OK "$pipVer"
-
-# --------------------------------------------------------------
-# 3. Detect NVIDIA GPU and pick PyTorch CUDA variant
-# --------------------------------------------------------------
-Write-Step "Checking NVIDIA GPU"
-
-$cudaIndex = 'https://download.pytorch.org/whl/cpu'
-$cudaLabel = 'CPU (no GPU detected)'
+$python = $null
+$pythonVersion = $null
 
 try {
-    $smi = & nvidia-smi --query-gpu=name,driver_version --format=csv,noheader 2>&1
-    if ($smi -match '^(.+),\s*([\d\.]+)') {
-        $gpuName     = $Matches[1].Trim()
-        $driverVer   = $Matches[2].Trim()
-        $driverMajor = [int]($driverVer.Split('.')[0])
+    $versions = & py -0p 2>$null
 
-        Write-OK "GPU    : $gpuName"
-        Write-OK "Driver : $driverVer"
+    if ($versions) {
+        $bestVer = [version]"0.0.0"
+        $bestPath = $null
 
-        if ($driverMajor -ge 551) {
-            $cudaIndex = 'https://download.pytorch.org/whl/cu124'
-            $cudaLabel = 'CUDA 12.4'
-            Write-OK 'PyTorch variant: CUDA 12.4'
-        } elseif ($driverMajor -ge 528) {
-            $cudaIndex = 'https://download.pytorch.org/whl/cu121'
-            $cudaLabel = 'CUDA 12.1'
-            Write-OK 'PyTorch variant: CUDA 12.1'
-        } elseif ($driverMajor -ge 452) {
-            $cudaIndex = 'https://download.pytorch.org/whl/cu118'
-            $cudaLabel = 'CUDA 11.8'
-            Write-Warn 'CUDA 11.8 selected - update drivers for CUDA 12 support'
-        } else {
-            Write-Warn 'Driver too old for CUDA PyTorch - falling back to CPU'
+        foreach ($line in $versions) {
+            if ($line -match "-(\d+\.\d+).*?\s+(.*python\.exe)") {
+                $ver = [version]$Matches[1]
+                $path = $Matches[2]
+
+                if ($ver -gt $bestVer) {
+                    $bestVer = $ver
+                    $bestPath = $path
+                }
+            }
+        }
+
+        if ($bestPath) {
+            $python = $bestPath
+            $pythonVersion = $bestVer
+            Write-OK "Selected Python $pythonVersion"
         }
     }
 } catch {
-    Write-Warn 'nvidia-smi not found - will install CPU-only PyTorch'
+    Write-Warn "Python Launcher (py) not available"
 }
 
-Write-Info "PyTorch index: $cudaIndex  ($cudaLabel)"
+# --------------------------------------------------------------
+# Fallback to system python
+# --------------------------------------------------------------
+if (-not $python) {
+    try {
+        $v = & python --version 2>&1
+        if ($v -match "Python (\d+\.\d+\.\d+)") {
+            $python = "python"
+            $pythonVersion = $Matches[1]
+            Write-OK "Fallback Python $pythonVersion"
+        }
+    } catch {}
+}
 
 # --------------------------------------------------------------
-# 4. NumPy (must come before PyTorch so its import doesn't warn)
+# Install Python if missing
+# --------------------------------------------------------------
+if (-not $python) {
+    Write-Warn "No Python found. Installing Python 3.13..."
+
+    winget install Python.Python.3.13 `
+        --silent `
+        --accept-package-agreements `
+        --accept-source-agreements
+
+    $python = "python"
+    Write-OK "Python installed"
+}
+
+Write-Info "Using Python: $python"
+
+# --------------------------------------------------------------
+# 2. Upgrade pip
+# --------------------------------------------------------------
+Write-Step "Upgrading pip"
+& $python -m pip install --upgrade pip
+if ($LASTEXITCODE -ne 0) { Write-Fail "pip upgrade failed" }
+Write-OK "pip upgraded"
+
+# --------------------------------------------------------------
+# 3. GPU detection + CUDA selection
+# --------------------------------------------------------------
+Write-Step "Detecting GPU + selecting PyTorch build"
+
+$hasGPU = $false
+
+try {
+    $gpuName = & nvidia-smi --query-gpu=name --format=csv,noheader 2>$null
+    if ($gpuName) {
+        $hasGPU = $true
+        Write-OK "GPU detected: $gpuName"
+    }
+} catch {
+    Write-Warn "No NVIDIA GPU detected"
+}
+
+# --------------------------------------------------------------
+# CUDA options
+# --------------------------------------------------------------
+$cudaOptions = @(
+    [pscustomobject]@{
+        label = "CPU only"
+        index = "https://download.pytorch.org/whl/cpu"
+        note  = "Slow but most compatible"
+    },
+    [pscustomobject]@{
+        label = "CUDA 12.1 (recommended for RTX 5060)"
+        index = "https://download.pytorch.org/whl/cu121"
+        note  = "Best stability + widest support"
+    },
+    [pscustomobject]@{
+        label = "CUDA 12.4 (newer drivers)"
+        index = "https://download.pytorch.org/whl/cu124"
+        note  = "Newer optimizations"
+    },
+    [pscustomobject]@{
+        label = "CUDA 12.8 (experimental)"
+        index = "https://download.pytorch.org/whl/cu128"
+        note  = "Bleeding edge, may break"
+    }
+)
+
+Write-Host ""
+Write-Host "Available PyTorch builds:" -ForegroundColor White
+Write-Host ""
+
+for ($i = 0; $i -lt $cudaOptions.Count; $i++) {
+    Write-Host "[$i] $($cudaOptions[$i].label)" -ForegroundColor Cyan
+    Write-Host "    $($cudaOptions[$i].note)" -ForegroundColor Gray
+}
+
+Write-Host ""
+Write-Host "Recommendation: use option 1 (CUDA 12.1) unless you know better." -ForegroundColor Yellow
+Write-Host ""
+
+$selection = Read-Host "Select option [default: 1]"
+
+if ([string]::IsNullOrWhiteSpace($selection)) {
+    $selection = 1
+}
+
+if ($selection -notmatch '^\d+$' -or [int]$selection -ge $cudaOptions.Count) {
+    Write-Warn "Invalid selection → defaulting to CUDA 12.1"
+    $selection = 1
+}
+
+$cudaIndex = $cudaOptions[$selection].index
+$cudaLabel = $cudaOptions[$selection].label
+
+Write-OK "Selected: $cudaLabel"
+
+# --------------------------------------------------------------
+# 4. NumPy
 # --------------------------------------------------------------
 Write-Step "Installing NumPy"
-& $pythonCmd -m pip install numpy --quiet
-if ($LASTEXITCODE -ne 0) { Write-Fail "NumPy install failed (pip exit code $LASTEXITCODE)" }
-$numpyVer = & $pythonCmd -c 'import numpy; print(numpy.__version__)' 2>&1
-if ($LASTEXITCODE -ne 0) { Write-Fail "NumPy installed but import failed: $numpyVer" }
-Write-OK "numpy $numpyVer"
+& $python -m pip install numpy
+if ($LASTEXITCODE -ne 0) { Write-Fail "NumPy install failed" }
+Write-OK "NumPy installed"
 
 # --------------------------------------------------------------
 # 5. PyTorch
 # --------------------------------------------------------------
-Write-Step "Installing PyTorch (~2 GB for CUDA variant, please wait)"
-& $pythonCmd -m pip install torch --index-url $cudaIndex
-if ($LASTEXITCODE -ne 0) { Write-Fail "PyTorch install failed (pip exit code $LASTEXITCODE)" }
-$torchVer = & $pythonCmd -c 'import torch; print(torch.__version__)' 2>&1
-if ($LASTEXITCODE -ne 0) { Write-Fail "PyTorch installed but import failed: $torchVer" }
-Write-OK "torch $torchVer"
+Write-Step "Installing PyTorch (this may take a while)"
+& $python -m pip install torch --index-url $cudaIndex
+if ($LASTEXITCODE -ne 0) { Write-Fail "PyTorch install failed" }
+Write-OK "PyTorch installed"
 
 # --------------------------------------------------------------
-# 6. Python packages
+# 6. Whisper dependencies
 # --------------------------------------------------------------
-Write-Step "Installing Python packages"
+Write-Step "Installing Whisper dependencies"
 
 $packages = @(
-    [pscustomobject]@{ name = 'faster-whisper'; imp = 'faster_whisper' },
-    [pscustomobject]@{ name = 'sounddevice';    imp = 'sounddevice'    },
-    [pscustomobject]@{ name = 'soundfile';      imp = 'soundfile'      },
-    [pscustomobject]@{ name = 'pynput';         imp = 'pynput'         }
+    "ctranslate2",
+    "faster-whisper",
+    "sounddevice",
+    "soundfile",
+    "pynput"
 )
 
-foreach ($pkg in $packages) {
-    Write-Info "Installing $($pkg.name)..."
-    & $pythonCmd -m pip install $pkg.name --quiet
-    if ($LASTEXITCODE -ne 0) { Write-Fail "$($pkg.name) install failed (pip exit code $LASTEXITCODE)" }
-    $ver = & $pythonCmd -c "import $($pkg.imp); print(getattr($($pkg.imp), '__version__', 'ok'))" 2>&1
-    if ($LASTEXITCODE -ne 0) { Write-Fail "$($pkg.name) import failed: $ver" }
-    Write-OK "$($pkg.name) $ver"
+foreach ($p in $packages) {
+    Write-Info "Installing $p"
+    & $python -m pip install $p
+    if ($LASTEXITCODE -ne 0) { Write-Fail "$p install failed" }
+    Write-OK "$p installed"
 }
 
 # --------------------------------------------------------------
-# 7. Verify all imports
+# 7. Verification
 # --------------------------------------------------------------
-Write-Step "Verifying imports"
+Write-Step "Verifying installation"
 
-$verifyPy = @'
-import sys
-ok = True
-for lib in ["torch", "faster_whisper", "sounddevice", "soundfile", "pynput", "numpy"]:
-    try:
-        __import__(lib)
-        print("  OK  " + lib)
-    except ImportError as e:
-        print("  FAIL " + lib + ": " + str(e))
-        ok = False
-
+$verify = @'
 import torch
-if torch.cuda.is_available():
-    print("\n  Torch device : CUDA " + str(torch.version.cuda))
-    print("  GPU          : " + torch.cuda.get_device_name(0))
-else:
-    print("\n  Torch device : CPU only")
 
-sys.exit(0 if ok else 1)
+print("Torch:", torch.__version__)
+print("CUDA available:", torch.cuda.is_available())
+
+if torch.cuda.is_available():
+    print("GPU:", torch.cuda.get_device_name(0))
+else:
+    print("Running on CPU")
 '@
 
-$verifyFile = [System.IO.Path]::GetTempFileName() + '.py'
-Set-Content -Path $verifyFile -Value $verifyPy -Encoding UTF8
-& $pythonCmd $verifyFile
-if ($LASTEXITCODE -ne 0) { Write-Warn "One or more imports failed - check output above" }
-Remove-Item $verifyFile
+$tmp = "$env:TEMP\verify_whisper.py"
+Set-Content -Path $tmp -Value $verify -Encoding UTF8
+& $python $tmp
+Remove-Item $tmp
 
 # --------------------------------------------------------------
 # 8. Create transcripts folder
 # --------------------------------------------------------------
 Write-Step "Creating transcripts folder"
-$transcriptDir = Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'transcripts'
-if (-not (Test-Path $transcriptDir)) {
-    New-Item -ItemType Directory -Path $transcriptDir | Out-Null
-}
-Write-OK $transcriptDir
 
+$root = Split-Path -Parent $PSScriptRoot
+$folder = Join-Path $root "transcripts"
+
+if (-not (Test-Path $folder)) {
+    New-Item -ItemType Directory -Path $folder | Out-Null
+}
+
+Write-OK "Created: $folder"
+
+# --------------------------------------------------------------
+# DONE
 # --------------------------------------------------------------
 Write-Host ""
 Write-Host "============================================" -ForegroundColor Green
-Write-Host "  Setup complete. Run the app with:        " -ForegroundColor Green
-Write-Host "  python scripts\transcribe_tts.py         " -ForegroundColor Green
-Write-Host "  (first run downloads Whisper ~500 MB)    " -ForegroundColor Green
+Write-Host " Setup complete!" -ForegroundColor Green
+Write-Host " Run: python scripts\transcribe_tts.py" -ForegroundColor Green
 Write-Host "============================================" -ForegroundColor Green
 Write-Host ""
