@@ -6,3 +6,7 @@ CLAUDE.md
 *.txt
 *.mp3
 *.wav
+recordings/
+
+# generated output folders
+transcripts/

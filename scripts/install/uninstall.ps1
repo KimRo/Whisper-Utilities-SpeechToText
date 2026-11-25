@@ -51,6 +51,8 @@ $packages = @(
     'sounddevice',
     'soundfile',
     'pynput',
+    'PyAudioWPatch',
+    'pystray',
     'numpy'
 )
 

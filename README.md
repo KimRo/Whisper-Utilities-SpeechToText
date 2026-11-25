@@ -8,6 +8,8 @@ Two offline speech-to-text tools powered by [faster-whisper](https://github.com/
 |---|---|
 | `scripts/transcribe_tts.py` | Push-to-talk live transcriber — hold Space to record, release to transcribe |
 | `scripts/transcribe_file.py` | Batch file transcriber — transcribe an existing audio file from the command line |
+| `scripts/record_meeting.py` | Meeting recorder — records microphone + system audio to MP3, then offers to transcribe it |
+| `scripts/record_meeting_gui.py` | Window + system-tray version of the meeting recorder; `scripts\create_shortcut.bat` makes a one-click Desktop/Start Menu shortcut |
 
 ## Installation
 
@@ -29,6 +31,8 @@ What the installer does:
 | `sounddevice` | Microphone audio capture |
 | `soundfile` | Audio file I/O |
 | `pynput` | Global keyboard listener (push-to-talk) |
+| `PyAudioWPatch` | WASAPI loopback capture of system audio (meeting recorder) |
+| `pystray` | System-tray icon for the meeting recorder GUI (Pillow is installed with it) |
 | `numpy` | Audio buffer processing |
 
 > Both scripts fall back to CPU automatically if CUDA is unavailable at runtime.
@@ -59,6 +63,9 @@ python scripts/transcribe_tts.py
 
 # Transcribe an audio file
 python scripts/transcribe_file.py recording.mp3
+
+# Record a meeting (mic + system audio), stop with Enter, then transcribe
+python scripts/record_meeting.py -o weekly-sync
 ```
 
 ## Sample
@@ -71,6 +78,7 @@ It downloads the recording of Martin Luther King Jr.'s *"I Have a Dream"* speech
 
 - [transcribe_tts.py](doc/transcribe_tts.md) — live push-to-talk transcriber
 - [transcribe_file.py](doc/transcribe_file.md) — audio file transcriber
+- [record_meeting.py](doc/record_meeting.md) — meeting recorder
 
 ## License
 

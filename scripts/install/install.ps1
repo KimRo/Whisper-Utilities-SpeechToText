@@ -213,7 +213,9 @@ $packages = @(
     "faster-whisper",
     "sounddevice",
     "soundfile",
-    "pynput"
+    "pynput",
+    "PyAudioWPatch",
+    "pystray"
 )
 
 foreach ($p in $packages) {
@@ -244,20 +246,6 @@ $tmp = "$env:TEMP\verify_whisper.py"
 Set-Content -Path $tmp -Value $verify -Encoding UTF8
 & $python $tmp
 Remove-Item $tmp
-
-# --------------------------------------------------------------
-# 8. Create transcripts folder
-# --------------------------------------------------------------
-Write-Step "Creating transcripts folder"
-
-$root = Split-Path -Parent $PSScriptRoot
-$folder = Join-Path $root "transcripts"
-
-if (-not (Test-Path $folder)) {
-    New-Item -ItemType Directory -Path $folder | Out-Null
-}
-
-Write-OK "Created: $folder"
 
 # --------------------------------------------------------------
 # DONE
