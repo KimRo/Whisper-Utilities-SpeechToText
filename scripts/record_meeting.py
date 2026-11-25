@@ -23,10 +23,12 @@ Options:
     --loopback ID     Loopback (system audio) device id (default: default output)
     --no-mic          Do not record the microphone
     --no-system       Do not record system audio
+    --duck            Hybrid meeting: lower the microphone while system audio plays, so
+                      remote voices coming out of the room speaker are not recorded twice
     --list-devices    Show available devices and exit
     --transcribe      ask | yes | no (default: ask) — run transcribe_file.py afterwards
     -l, --language    Passed to transcribe_file.py
-    --model           Passed to transcribe_file.py
+    --model           Passed to transcribe_file.py (default: medium)
     --cpu             Passed to transcribe_file.py
 
 Note: only record meetings when all participants know about and agree with it.
@@ -52,6 +54,11 @@ SAMPLE_RATE = 16000        # Whisper's native rate; plenty for speech
 MP3_BITRATE = 64000        # 64 kbps mono is small and clear for speech
 LATENCY = 0.5              # seconds the mixer stays behind real time
 TICK = 0.1                 # mixer interval in seconds
+
+# Hybrid-meeting ducking (see Ducker)
+DUCK_GAIN = 0.15           # mic level while remote audio plays (1.0 = unchanged)
+DUCK_THRESHOLD = 0.01      # system-audio RMS (0..1, about -40 dBFS) that counts as "playing"
+DUCK_HOLD = 0.4            # seconds to keep ducking after the system audio goes quiet
 
 # ── Colours ─────────────────────────────────────────────────────────────────────
 if sys.platform == "win32":
@@ -197,6 +204,40 @@ def meter(p: float) -> str:
     return "█" * level + "·" * (10 - level)
 
 
+class Ducker:
+    """Hybrid-meeting helper: lower the microphone while remote audio is playing.
+
+    In a hybrid meeting the colleagues' voices come out of the room speaker and the room
+    microphone hears them again (slightly delayed), so they would be recorded twice.
+    While the system-audio source is active the microphone gain is reduced to DUCK_GAIN,
+    and it returns to 1.0 DUCK_HOLD seconds after the system audio goes quiet.
+    Trade-off: people in the room talking over a remote colleague are recorded quieter.
+    """
+
+    def __init__(self, gain: float = DUCK_GAIN, threshold: float = DUCK_THRESHOLD,
+                 hold: float = DUCK_HOLD):
+        self.low, self.threshold, self.hold = gain, threshold, hold
+        self.gain = 1.0          # gain at the end of the previous chunk
+        self.hold_left = 0.0     # seconds the ducking stays active after the last loud chunk
+        self.active = False      # for display
+
+    def process(self, mic: np.ndarray, system: np.ndarray) -> np.ndarray:
+        n = len(mic)
+        if n == 0:
+            return mic
+        rms = float(np.sqrt(np.mean((system.astype(np.float32) / 32768.0) ** 2)))
+        if rms > self.threshold:
+            self.hold_left = self.hold
+        else:
+            self.hold_left = max(0.0, self.hold_left - n / SAMPLE_RATE)
+        target = self.low if self.hold_left > 0 else 1.0
+        # Ramp across the chunk to avoid clicks.
+        ramp = np.linspace(self.gain, target, n, endpoint=False, dtype=np.float32)
+        self.gain = target
+        self.active = target < 1.0
+        return (mic.astype(np.float32) * ramp).astype(np.int16)
+
+
 def open_sources(pa, mic: int | None = None, loopback: int | None = None,
                  no_mic: bool = False, no_system: bool = False) -> list[Source]:
     """Open the requested capture sources (defaults: default mic + default output loopback)."""
@@ -230,11 +271,14 @@ def transcribe_command(mp3_path: Path, name: str | None, language: str | None = 
 
 
 def record(sources: list[Source], mp3_path: Path, stop: threading.Event,
-           on_tick=None) -> float:
+           on_tick=None, duck: bool = False) -> float:
     """Mix all sources and stream them into an MP3 until stop is set. Returns seconds.
 
     on_tick(elapsed_seconds, sources) is called ~10x/s; without it a console line is printed.
+    duck: lower the microphone while system audio plays (hybrid meetings, see Ducker);
+          only has an effect when both a "mic" and a "sys" source are recording.
     """
+    ducker = Ducker() if duck and {s.label for s in sources} >= {"mic", "sys"} else None
     out = av.open(str(mp3_path), "w")
     stream = out.add_stream("libmp3lame", rate=SAMPLE_RATE)
     stream.layout = "mono"
@@ -258,9 +302,12 @@ def record(sources: list[Source], mp3_path: Path, stop: threading.Event,
                 s.drain()
             n = target - emitted
             if n > 0:
+                parts = {s.label: s.take(n) for s in sources}
+                if ducker is not None:
+                    parts["mic"] = ducker.process(parts["mic"], parts["sys"])
                 mix = np.zeros(n, dtype=np.int32)
-                for s in sources:
-                    mix += s.take(n)
+                for a in parts.values():
+                    mix += a
                 write(np.clip(mix, -32768, 32767).astype(np.int16))
                 emitted = target
                 if on_tick is not None:
@@ -302,10 +349,11 @@ def main() -> None:
     ap.add_argument("--loopback", type=int)
     ap.add_argument("--no-mic", action="store_true")
     ap.add_argument("--no-system", action="store_true")
+    ap.add_argument("--duck", action="store_true")
     ap.add_argument("--list-devices", action="store_true")
     ap.add_argument("--transcribe", choices=["ask", "yes", "no"], default="ask")
     ap.add_argument("-l", "--language")
-    ap.add_argument("--model")
+    ap.add_argument("--model", default="medium")
     ap.add_argument("--cpu", action="store_true")
     args = ap.parse_args()
 
@@ -343,7 +391,7 @@ def main() -> None:
 
     seconds = 0.0
     try:
-        seconds = record(sources, mp3_path, stop)
+        seconds = record(sources, mp3_path, stop, duck=args.duck)
     except KeyboardInterrupt:
         # record() closes and finalises the MP3 in its own finally block.
         print("", file=sys.stderr)

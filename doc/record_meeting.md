@@ -27,10 +27,11 @@ Stop recording with **Enter** or **Ctrl+C**. While recording, the elapsed time a
 | `--loopback ID` | System-audio device id (default: loopback of the default output device) |
 | `--no-mic` | Record system audio only |
 | `--no-system` | Record microphone only |
+| `--duck` | Hybrid-meeting mode: lower the microphone while system audio plays (see below) |
 | `--list-devices` | Print device ids and exit |
 | `--transcribe ask\|yes\|no` | Run `transcribe_file.py` afterwards (default: `ask`) |
 | `-l, --language` | Passed to `transcribe_file.py` |
-| `--model` | Passed to `transcribe_file.py` |
+| `--model` | Passed to `transcribe_file.py` (default: `medium`) |
 | `--cpu` | Passed to `transcribe_file.py` |
 
 ## Output
@@ -39,7 +40,7 @@ Recordings are saved to the repo-root `recordings\` folder as `<YYYY-MM-DD_HH-MM
 
 ## GUI and shortcut
 
-`scripts/record_meeting_gui.py` is a small window with a timer, level meters for both sources, a Start/Stop button, a "Transcribe after stopping" checkbox and language/model pickers (defaults `nl` / `small`). **Minimize to tray** hides it in the system tray (grey icon = idle, red = recording; right-click for Show / Start / Stop / Quit). Closing the window while recording also moves it to the tray; closing it while idle quits. Transcription opens in its own console window.
+`scripts/record_meeting_gui.py` is a small window with a timer, level meters for both sources, a Start/Stop button, a "Transcribe after stopping" checkbox and language/model pickers (defaults `nl` / `medium`). Two dropdowns list the detected **microphones** and **system-audio (loopback) devices**: each defaults to the Windows default device and can be set to *Off*; **Refresh devices** rescans (for example after plugging in a headset). The dropdowns are locked while recording. **Minimize to tray** hides it in the system tray (grey icon = idle, red = recording; right-click for Show / Start / Stop / Quit). Closing the window while recording also moves it to the tray; closing it while idle quits. Transcription opens in its own console window.
 
 ```powershell
 python scripts/record_meeting_gui.py                       # open the window
@@ -48,6 +49,18 @@ python scripts/record_meeting_gui.py --autostart --tray    # start recording, hi
 ```
 
 Double-click **`scripts\create_shortcut.bat`** to create a *Meeting Recorder* shortcut on the Desktop and in the Start Menu. It runs the GUI without a console window with `--autostart`, i.e. one click starts recording with the default microphone and speakers. Run it with `-Tray` to make the shortcut start hidden in the tray, or `-Remove` to delete the shortcuts. Only one instance can run at a time.
+
+## Hybrid meetings (`--duck` / GUI checkbox)
+
+In a hybrid meeting the colleagues' voices come out of the room speaker, and the room microphone hears them a second time (slightly delayed) in addition to the system-audio capture, so remote voices would be recorded twice and sound echoey.
+
+With **"Hybrid meeting: lower mic while remote audio plays"** (GUI) or `--duck` (command line), the microphone level is reduced to 15% while the system audio is playing, and restored 0.4 s after it goes quiet. The values are constants at the top of `record_meeting.py` (`DUCK_GAIN`, `DUCK_THRESHOLD`, `DUCK_HOLD`).
+
+Limitations:
+- People in the room who talk **over** a remote colleague are recorded quieter.
+- Ducking only starts when the system audio exceeds `DUCK_THRESHOLD` (about -40 dBFS). If the Teams volume is very low, raise it or lower the threshold.
+- It needs both the microphone and system audio to be recording. It is off by default.
+- Alternative without any processing: record the room microphone only (set *System audio* to Off, or use `--no-system`); the room mic then hears both the room and the speaker.
 
 ## Notes
 

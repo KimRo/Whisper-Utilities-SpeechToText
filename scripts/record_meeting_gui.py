@@ -44,6 +44,8 @@ except ImportError:
 
 LANGUAGES = ["nl", "en", "fr", "de", "es", "it", "pt", "pl", "sv", "da", "no", "fi"]
 MODELS = ["tiny", "base", "small", "medium", "large-v2", "large-v3"]
+DEFAULT_MODEL = "medium"
+OFF = "Off (don't record this source)"
 
 
 def tray_image(recording: bool) -> Image.Image:
@@ -93,24 +95,43 @@ class App:
             bar.grid(row=r, column=1, columnspan=2, padx=(8, 0), pady=2)
             self.bars[key] = bar
 
+        # Input device pickers (filled by refresh_devices)
+        self.mic_var = tk.StringVar()
+        self.sys_var = tk.StringVar()
+        self.mic_map: dict[str, tuple] = {}
+        self.sys_map: dict[str, tuple] = {}
+        ttk.Label(frm, text="Mic device").grid(row=3, column=0, sticky="w", pady=(8, 0))
+        self.mic_box = ttk.Combobox(frm, textvariable=self.mic_var, state="readonly", width=38)
+        self.mic_box.grid(row=3, column=1, columnspan=2, padx=(8, 0), pady=(8, 0), sticky="ew")
+        ttk.Label(frm, text="System audio").grid(row=4, column=0, sticky="w", pady=(2, 0))
+        self.sys_box = ttk.Combobox(frm, textvariable=self.sys_var, state="readonly", width=38)
+        self.sys_box.grid(row=4, column=1, columnspan=2, padx=(8, 0), pady=(2, 0), sticky="ew")
+        self.refresh_btn = ttk.Button(frm, text="Refresh devices", command=self.refresh_devices)
+        self.refresh_btn.grid(row=5, column=1, columnspan=2, sticky="e", pady=(2, 0))
+
+        self.duck = tk.BooleanVar(value=False)
+        self.duck_cb = ttk.Checkbutton(
+            frm, text="Hybrid meeting: lower mic while remote audio plays", variable=self.duck)
+        self.duck_cb.grid(row=6, column=0, columnspan=3, sticky="w", pady=(8, 0))
+
         self.status = tk.StringVar(value="Ready")
-        ttk.Label(frm, textvariable=self.status, wraplength=300, foreground="#555").grid(
-            row=3, column=0, columnspan=3, sticky="w", pady=(8, 8))
+        ttk.Label(frm, textvariable=self.status, wraplength=340, foreground="#555").grid(
+            row=7, column=0, columnspan=3, sticky="w", pady=(8, 8))
 
         self.transcribe = tk.BooleanVar(value=True)
         ttk.Checkbutton(frm, text="Transcribe after stopping", variable=self.transcribe).grid(
-            row=4, column=0, columnspan=3, sticky="w")
+            row=8, column=0, columnspan=3, sticky="w")
         self.lang = tk.StringVar(value="nl")
-        self.model = tk.StringVar(value="small")
-        ttk.Label(frm, text="Language").grid(row=5, column=0, sticky="w", pady=(4, 0))
+        self.model = tk.StringVar(value=DEFAULT_MODEL)
+        ttk.Label(frm, text="Language").grid(row=9, column=0, sticky="w", pady=(4, 0))
         ttk.Combobox(frm, textvariable=self.lang, values=LANGUAGES, width=8).grid(
-            row=5, column=1, sticky="w", padx=(8, 0), pady=(4, 0))
-        ttk.Label(frm, text="Model").grid(row=6, column=0, sticky="w")
+            row=9, column=1, sticky="w", padx=(8, 0), pady=(4, 0))
+        ttk.Label(frm, text="Model").grid(row=10, column=0, sticky="w")
         ttk.Combobox(frm, textvariable=self.model, values=MODELS, width=8,
-                     state="readonly").grid(row=6, column=1, sticky="w", padx=(8, 0))
+                     state="readonly").grid(row=10, column=1, sticky="w", padx=(8, 0))
 
         btns = ttk.Frame(frm)
-        btns.grid(row=7, column=0, columnspan=3, pady=(12, 0), sticky="ew")
+        btns.grid(row=11, column=0, columnspan=3, pady=(12, 0), sticky="ew")
         self.btn = ttk.Button(btns, text="● Start recording", command=self.toggle)
         self.btn.pack(side="left", expand=True, fill="x")
         self.tray_btn = ttk.Button(btns, text="Minimize to tray", command=self.to_tray)
@@ -121,6 +142,7 @@ class App:
 
         root.protocol("WM_DELETE_WINDOW", self.on_close)
         self.pa = None
+        self.refresh_devices()
         self.poll()
 
         if autostart:
@@ -163,6 +185,51 @@ class App:
         self.root.lift()
         self.root.focus_force()
 
+    # ── Devices ─────────────────────────────────────────────────────────────────
+    def refresh_devices(self):
+        """(Re)read the input devices; keep the previous choice if it still exists."""
+        if self.recording:
+            return
+        pa = rm.pyaudio.PyAudio()
+        try:
+            mics, loops = rm.list_sources(pa)
+            try:
+                def_mic = rm.default_mic(pa)["name"]
+            except Exception:
+                def_mic = "none found"
+            try:
+                def_sys = rm.default_loopback(pa)["name"]
+            except Exception:
+                def_sys = "none found"
+        finally:
+            pa.terminate()
+
+        self.mic_map = {f"Default ({def_mic})": ("default", None)}
+        self.mic_map.update({f"{d['name']}": ("dev", int(d["index"])) for d in mics})
+        self.mic_map[OFF] = ("off", None)
+        self.sys_map = {f"Default ({def_sys})": ("default", None)}
+        self.sys_map.update({f"{d['name']}": ("dev", int(d["index"])) for d in loops})
+        self.sys_map[OFF] = ("off", None)
+
+        for box, var, mapping in ((self.mic_box, self.mic_var, self.mic_map),
+                                  (self.sys_box, self.sys_var, self.sys_map)):
+            box["values"] = list(mapping)
+            if var.get() not in mapping:
+                var.set(next(iter(mapping)))   # first entry = default
+
+    def selected_devices(self) -> dict:
+        mic_kind, mic_idx = self.mic_map.get(self.mic_var.get(), ("default", None))
+        sys_kind, sys_idx = self.sys_map.get(self.sys_var.get(), ("default", None))
+        return {"mic": mic_idx, "loopback": sys_idx,
+                "no_mic": mic_kind == "off", "no_system": sys_kind == "off"}
+
+    def set_controls(self, enabled: bool):
+        state = "readonly" if enabled else "disabled"
+        self.mic_box.config(state=state)
+        self.sys_box.config(state=state)
+        self.refresh_btn.state(["!disabled"] if enabled else ["disabled"])
+        self.duck_cb.state(["!disabled"] if enabled else ["disabled"])
+
     # ── Recording ───────────────────────────────────────────────────────────────
     def toggle(self):
         if self.recording:
@@ -173,20 +240,27 @@ class App:
     def start(self):
         if self.recording or (self.thread and self.thread.is_alive()):
             return
+        choice = self.selected_devices()
+        if choice["no_mic"] and choice["no_system"]:
+            self.status.set("Nothing to record: both sources are set to Off.")
+            self.show()
+            return
         self.pa = rm.pyaudio.PyAudio()
         try:
-            sources = rm.open_sources(self.pa)
+            sources = rm.open_sources(self.pa, **choice)
         except Exception as e:
             self.pa.terminate()
             self.status.set(f"Could not open audio device: {e}")
             self.show()
             return
         self.mp3_path = rm.build_name(None)
+        self.duck_enabled = self.duck.get()   # read here: Tk variables belong to the UI thread
         self.stop_evt.clear()
         self.result = None
         self.recording = True
         self.elapsed = 0.0
         self.btn.config(text="■ Stop recording")
+        self.set_controls(False)
         self.status.set(f"Recording to {self.mp3_path.name}")
         self.thread = threading.Thread(target=self.worker, args=(sources,), daemon=True)
         self.thread.start()
@@ -201,7 +275,8 @@ class App:
                 for s in srcs:
                     self.peaks[s.label] = s.peak
 
-            rm.record(sources, self.mp3_path, self.stop_evt, on_tick=on_tick)
+            rm.record(sources, self.mp3_path, self.stop_evt, on_tick=on_tick,
+                      duck=self.duck_enabled)
             silent = [s.label for s in sources if s.max_peak < 0.001]
         except Exception as e:  # noqa: BLE001 - report anything to the UI
             err = str(e)
@@ -222,6 +297,7 @@ class App:
         self.recording = False
         self.peaks = {"mic": 0.0, "sys": 0.0}
         self.btn.config(text="● Start recording")
+        self.set_controls(True)
         path = self.mp3_path
         if res["error"]:
             self.status.set(f"Error: {res['error']}")
