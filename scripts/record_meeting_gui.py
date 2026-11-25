@@ -8,7 +8,8 @@ Usage:
     python scripts/record_meeting_gui.py --autostart --tray   # ... and start minimized to tray
 
 Records microphone + system audio with the default devices to recordings/<timestamp>_meeting.mp3.
-The window can be minimized to the system tray (button, or closing the window while recording).
+The window can be minimized to the system tray (the window's minimize button, the
+"Minimize to tray" button, or closing the window while recording).
 Tray icon: red = recording, grey = idle. Right-click for Show / Start / Stop / Quit.
 After stopping, the recording can be transcribed automatically (opens in its own console
 window): "Normal" runs transcribe_file.py, "With speakers" runs transcribe_speakers.py, which
@@ -174,6 +175,7 @@ class App:
             self.status.set("Ready (tray unavailable: pip install pystray)")
 
         root.protocol("WM_DELETE_WINDOW", self.on_close)
+        root.bind("<Unmap>", self.on_unmap)
         self.pa = None
         self.refresh_devices()
         self.poll()
@@ -212,6 +214,12 @@ class App:
         if self.icon is not None:
             self.root.withdraw()
             self.refresh_icon()
+
+    def on_unmap(self, event):
+        """The window's own minimize button sends the window to the tray, not the taskbar."""
+        if (event.widget is self.root and not self.closing and pystray is not None
+                and self.root.state() == "iconic"):
+            self.to_tray()
 
     def show(self):
         self.root.deiconify()

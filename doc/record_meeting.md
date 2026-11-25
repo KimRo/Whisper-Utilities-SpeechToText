@@ -41,7 +41,7 @@ Recordings are saved to the repo-root `recordings\` folder as `<YYYY-MM-DD_HH-MM
 
 ## GUI and shortcut
 
-`scripts/record_meeting_gui.py` is a small window with a timer, level meters for both sources, a Start/Stop button, a "Transcribe after stopping" checkbox and language/model pickers (defaults `nl` / `medium`). Two dropdowns list the detected **microphones** and **system-audio (loopback) devices**: each defaults to the Windows default device and can be set to *Off*; **Refresh devices** rescans (for example after plugging in a headset). The dropdowns are locked while recording. **Minimize to tray** hides it in the system tray (grey icon = idle, red = recording; right-click for Show / Start / Stop / Quit). Closing the window while recording also moves it to the tray; closing it while idle quits. Transcription opens in its own console window.
+`scripts/record_meeting_gui.py` is a small window with a timer, level meters for both sources, a Start/Stop button, a "Transcribe after stopping" checkbox and language/model pickers (defaults `nl` / `medium`). Two dropdowns list the detected **microphones** and **system-audio (loopback) devices**: each defaults to the Windows default device and can be set to *Off*; **Refresh devices** rescans (for example after plugging in a headset). The dropdowns are locked while recording. **Minimize to tray**, or the window's own minimize button, hides it in the system tray instead of the taskbar (grey icon = idle, red = recording; right-click for Show / Start / Stop / Quit). Closing the window while recording also moves it to the tray; closing it while idle quits. Transcription opens in its own console window.
 
 ```powershell
 python scripts/record_meeting_gui.py                       # open the window
