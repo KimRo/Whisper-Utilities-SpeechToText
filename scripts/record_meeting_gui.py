@@ -13,6 +13,8 @@ Tray icon: red = recording, grey = idle. Right-click for Show / Start / Stop / Q
 After stopping, the recording can be transcribed automatically (opens in its own console
 window): "Normal" runs transcribe_file.py, "With speakers" runs transcribe_speakers.py, which
 labels who says what (needs the one-time Hugging Face token, see doc/transcribe_speakers.md).
+"Transcribe a recording..." does the same for any existing audio file you pick (the dialog
+opens in the recordings folder), using the mode, language and model selected in the window.
 
 Only record meetings when all participants know about and agree with it.
 """
@@ -25,7 +27,7 @@ import sys
 import threading
 import tkinter as tk
 from pathlib import Path
-from tkinter import ttk
+from tkinter import filedialog, ttk
 
 from PIL import Image, ImageDraw
 
@@ -47,6 +49,10 @@ LANGUAGES = ["nl", "en", "fr", "de", "es", "it", "pt", "pl", "sv", "da", "no", "
 MODELS = ["tiny", "base", "small", "medium", "large-v2", "large-v3"]
 DEFAULT_MODEL = "medium"
 OFF = "Off (don't record this source)"
+AUDIO_TYPES = [
+    ("Audio and video files", "*.mp3 *.wav *.m4a *.flac *.ogg *.opus *.aac *.wma *.mp4 *.webm *.mkv"),
+    ("All files", "*.*"),
+]
 
 
 def tray_image(recording: bool) -> Image.Image:
@@ -140,6 +146,8 @@ class App:
 
         btns = ttk.Frame(frm)
         btns.grid(row=12, column=0, columnspan=3, pady=(12, 0), sticky="ew")
+        self.pick_btn = ttk.Button(frm, text="Transcribe a recording…", command=self.pick_recording)
+        self.pick_btn.grid(row=13, column=0, columnspan=3, pady=(6, 0), sticky="ew")
         self.btn = ttk.Button(btns, text="● Start recording", command=self.toggle)
         self.btn.pack(side="left", expand=True, fill="x")
         self.tray_btn = ttk.Button(btns, text="Minimize to tray", command=self.to_tray)
@@ -322,9 +330,21 @@ class App:
         if self.quit_after_stop:
             self.quit()
 
-    def launch_transcription(self, path):
+    def pick_recording(self):
+        """Choose an existing audio file (default: the recordings folder) and transcribe it
+        with the mode, language and model currently selected in the window."""
+        start = rm.RECORDINGS_DIR if rm.RECORDINGS_DIR.is_dir() else rm.RECORDINGS_DIR.parent
+        chosen = filedialog.askopenfilename(parent=self.root, title="Choose a recording to transcribe",
+                                            initialdir=str(start), filetypes=AUDIO_TYPES)
+        if not chosen:
+            return  # cancelled
+        path = Path(chosen)
+        self.status.set(f"Selected {path.name}")
+        self.launch_transcription(path, name=path.stem)
+
+    def launch_transcription(self, path, name="meeting"):
         with_speakers = self.mode.get() == "speakers"
-        cmd = rm.transcribe_command(path, "meeting", self.lang.get() or None,
+        cmd = rm.transcribe_command(path, name, self.lang.get() or None,
                                     self.model.get() or None, speakers=with_speakers)
         # The transcribe scripts need a real console: use python.exe, not pythonw.exe
         cmd[0] = str(Path(sys.executable).with_name("python.exe"))
