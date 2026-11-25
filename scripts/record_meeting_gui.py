@@ -11,8 +11,9 @@ Records microphone + system audio with the default devices to recordings/<timest
 The window can be minimized to the system tray (the window's minimize button, the
 "Minimize to tray" button, or closing the window while recording).
 Tray icon: red = recording, grey = idle. Right-click for Show / Start / Stop / Quit.
-After stopping, the recording can be transcribed automatically (opens in its own console
-window): "Normal" runs transcribe_file.py, "With speakers" runs transcribe_speakers.py, which
+After stopping, the recording can be transcribed automatically (runs in the background;
+progress and the result appear in the Status box and the window comes to the front when it
+is done): "Normal" runs transcribe_file.py, "With speakers" runs transcribe_speakers.py, which
 labels who says what (needs the one-time Hugging Face token, see doc/transcribe_speakers.md).
 "Transcribe a recording..." does the same for any existing audio file you pick (the dialog
 opens in the recordings folder), using the mode, language and model selected in the window.
@@ -22,10 +23,13 @@ Only record meetings when all participants know about and agree with it.
 
 import argparse
 import ctypes
+import os
 import queue
+import re
 import subprocess
 import sys
 import threading
+import time
 import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, ttk
@@ -50,6 +54,9 @@ LANGUAGES = ["nl", "en", "fr", "de", "es", "it", "pt", "pl", "sv", "da", "no", "
 MODELS = ["tiny", "base", "small", "medium", "large-v2", "large-v3"]
 DEFAULT_MODEL = "medium"
 OFF = "Off (don't record this source)"
+ANSI = re.compile(r"\x1b\[[0-9;]*m")                     # colour codes in the scripts' output
+STAGES = ("Loading", "Transcribing", "Identifying", "Language")   # progress lines worth showing
+TX_COLORS = {"busy": "#555555", "ok": "#1a7f37", "fail": "#c62828"}
 AUDIO_TYPES = [
     ("Audio and video files", "*.mp3 *.wav *.m4a *.flac *.ogg *.opus *.aac *.wma *.mp4 *.webm *.mkv"),
     ("All files", "*.*"),
@@ -166,6 +173,12 @@ class App:
         status_frm = ttk.LabelFrame(frm, text="Status", style="Status.TLabelframe", padding=(8, 4))
         status_frm.grid(row=15, column=0, columnspan=3, pady=(14, 0), sticky="ew")
         ttk.Label(status_frm, textvariable=self.status, wraplength=345).pack(anchor="w", fill="x")
+        # Transcription progress/result: its own line so it never overwrites the recording status
+        self.tx_events: "queue.Queue[tuple]" = queue.Queue()   # from the transcription threads
+        self.jobs: dict[int, dict] = {}
+        self.job_seq = 0
+        self.tx_status = tk.StringVar(value="")
+        self.tx_label = ttk.Label(status_frm, textvariable=self.tx_status, wraplength=345)
         self.btn = ttk.Button(btns, text="● Start recording", command=self.toggle)
         self.btn.pack(side="left", expand=True, fill="x")
         self.tray_btn = ttk.Button(btns, text="Minimize to tray", command=self.to_tray)
@@ -393,15 +406,101 @@ class App:
         self.launch_transcription(path, name=path.stem)
 
     def launch_transcription(self, path, name="meeting"):
+        """Transcribe in a hidden background process; progress and result show in the Status box."""
         with_speakers = self.mode.get() == "speakers"
         cmd = rm.transcribe_command(path, name, self.lang.get() or None,
                                     self.model.get() or None, speakers=with_speakers)
-        # The transcribe scripts need a real console: use python.exe, not pythonw.exe
+        # Use python.exe (not pythonw.exe): the scripts print their progress to stderr
         cmd[0] = str(Path(sys.executable).with_name("python.exe"))
-        inner = subprocess.list2cmdline(cmd)
-        subprocess.Popen(f'cmd /c "{inner} & pause"', creationflags=subprocess.CREATE_NEW_CONSOLE)
-        kind = "transcribing with speakers" if with_speakers else "transcribing"
-        self.status.set(self.status.get() + f" — {kind} in a new window")
+        self.job_seq += 1
+        jid = self.job_seq
+        self.jobs[jid] = {"file": path.name, "start": time.monotonic(), "stage": "Starting",
+                          "kind": "with speakers" if with_speakers else "normal"}
+        threading.Thread(target=self.run_transcription, args=(jid, cmd), daemon=True).start()
+        self.update_tx_progress()
+
+    def run_transcription(self, jid: int, cmd: list):
+        """Worker thread: run the script without a console window and report back via tx_events."""
+        env = dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONUTF8="1")
+        try:
+            proc = subprocess.Popen(
+                cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                text=True, encoding="utf-8", errors="replace", env=env,
+                creationflags=subprocess.CREATE_NO_WINDOW)
+        except OSError as e:
+            self.tx_events.put(("done", jid, False, f"could not start the transcription: {e}"))
+            return
+        # The transcript itself goes to stdout and to the file; drain it so the pipe never fills.
+        threading.Thread(target=lambda: [None for _ in proc.stdout], daemon=True).start()
+        saved, tail = None, []
+        for raw in proc.stderr:
+            line = ANSI.sub("", raw).strip()
+            if not line:
+                continue
+            if line.startswith(STAGES):
+                self.tx_events.put(("stage", jid, line))
+            m = re.match(r"Saved\s*:\s*(.+)$", line)
+            if m:
+                saved = m.group(1).strip()
+            tail.append(line)
+            tail = tail[-12:]
+        code = proc.wait()
+        if code == 0 and saved:
+            self.tx_events.put(("done", jid, True, Path(saved).name))
+        elif code == 0 and any("No speech detected" in l for l in tail):
+            self.tx_events.put(("done", jid, True, "no speech was detected"))
+        elif code == 0:
+            self.tx_events.put(("done", jid, False, "the script finished without saving a transcript"))
+        else:
+            errors = [l for l in tail if l.startswith("Error") or "Error:" in l]
+            self.tx_events.put(("done", jid, False, (errors or tail or [f"exit code {code}"])[-1]))
+
+    def set_tx(self, text: str, kind: str = "busy"):
+        """Show (or hide, when empty) the transcription line in the Status box."""
+        if text and not self.tx_label.winfo_ismapped():
+            self.tx_label.pack(anchor="w", fill="x", pady=(6, 0))
+        elif not text and self.tx_label.winfo_ismapped():
+            self.tx_label.pack_forget()
+        self.tx_label.config(foreground=TX_COLORS[kind])
+        if self.tx_status.get() != text:
+            self.tx_status.set(text)
+
+    def update_tx_progress(self):
+        if not self.jobs:
+            return
+        if len(self.jobs) == 1:
+            job = next(iter(self.jobs.values()))
+            m, s = divmod(int(time.monotonic() - job["start"]), 60)
+            self.set_tx(f"Transcribing {job['file']} ({job['kind']}): {job['stage']} [{m:02d}:{s:02d}]")
+        else:
+            self.set_tx(f"{len(self.jobs)} transcriptions running ...")
+
+    def handle_tx_events(self):
+        finished = False
+        while True:
+            try:
+                kind, jid, *rest = self.tx_events.get_nowait()
+            except queue.Empty:
+                break
+            job = self.jobs.get(jid)
+            if kind == "stage" and job is not None:
+                job["stage"] = rest[0]
+            elif kind == "done" and job is not None:
+                ok, detail = rest
+                del self.jobs[jid]
+                finished = True
+                if ok:
+                    self.set_tx(f"Transcription finished: {job['file']}\nSaved as {detail}"
+                                if detail.endswith(".txt") else
+                                f"Transcription finished: {job['file']} ({detail})", "ok")
+                else:
+                    self.set_tx(f"Transcription failed: {job['file']}\n{detail[:300]}", "fail")
+        if finished:
+            if self.jobs:
+                self.update_tx_progress()      # others are still running: keep showing them
+            self.show()                        # back to the window (also out of the tray)
+        else:
+            self.update_tx_progress()
 
     # ── Event loop ──────────────────────────────────────────────────────────────
     def poll(self):
@@ -416,6 +515,7 @@ class App:
                 self.toggle()
             elif cmd == "quit":
                 self.request_quit()
+        self.handle_tx_events()
         if self.recording:
             m, s = divmod(int(self.elapsed), 60)
             h, m = divmod(m, 60)
