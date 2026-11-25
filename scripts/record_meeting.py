@@ -377,6 +377,10 @@ def main() -> None:
 
     if args.no_mic and args.no_system:
         fail("Nothing to record: --no-mic and --no-system were both given.")
+    if args.separate_channels and (args.no_mic or args.no_system):
+        info(f"{_OR}--separate-channels needs both a microphone and system audio; "
+             f"recording mono.{_R}")
+        args.separate_channels = False
 
     pa = pyaudio.PyAudio()
     if args.list_devices:

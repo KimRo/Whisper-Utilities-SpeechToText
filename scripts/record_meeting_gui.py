@@ -121,19 +121,23 @@ class App:
             frm, text="Hybrid meeting: lower mic while remote audio plays", variable=self.duck)
         self.duck_cb.grid(row=6, column=0, columnspan=3, sticky="w", pady=(8, 0))
 
+        # Separate channels need both a microphone and system audio: the checkbox is unchecked
+        # and disabled while either source is Off (see update_channel_option). stereo_pref is
+        # the user's own choice, restored when both sources are on again.
+        self.stereo_pref = True
         self.stereo = tk.BooleanVar(value=True)
         self.stereo_cb = ttk.Checkbutton(
             frm, text="Keep mic and system audio on separate channels (to label 'You')",
-            variable=self.stereo)
+            variable=self.stereo, command=self.on_stereo_toggle)
         self.stereo_cb.grid(row=7, column=0, columnspan=3, sticky="w")
+        self.mic_var.trace_add("write", self.update_channel_option)
+        self.sys_var.trace_add("write", self.update_channel_option)
 
         self.status = tk.StringVar(value="Ready")
-        ttk.Label(frm, textvariable=self.status, wraplength=340, foreground="#555").grid(
-            row=8, column=0, columnspan=3, sticky="w", pady=(8, 8))
 
         self.transcribe = tk.BooleanVar(value=True)
         ttk.Checkbutton(frm, text="Transcribe after stopping", variable=self.transcribe).grid(
-            row=9, column=0, columnspan=3, sticky="w")
+            row=9, column=0, columnspan=3, sticky="w", pady=(10, 0))
         # Which transcription to run after stopping: plain text, or text labelled per speaker
         self.mode = tk.StringVar(value="normal")
         mode_frm = ttk.Frame(frm)
@@ -154,6 +158,13 @@ class App:
         btns.grid(row=13, column=0, columnspan=3, pady=(12, 0), sticky="ew")
         self.pick_btn = ttk.Button(frm, text="Transcribe a recording…", command=self.pick_recording)
         self.pick_btn.grid(row=14, column=0, columnspan=3, pady=(6, 0), sticky="ew")
+
+        # Feedback ("Saved ...", errors, warnings) always at the very bottom, clearly headed
+        style = ttk.Style(root)
+        style.configure("Status.TLabelframe.Label", font=("Segoe UI", 10, "bold"))
+        status_frm = ttk.LabelFrame(frm, text="Status", style="Status.TLabelframe", padding=(8, 4))
+        status_frm.grid(row=15, column=0, columnspan=3, pady=(14, 0), sticky="ew")
+        ttk.Label(status_frm, textvariable=self.status, wraplength=345).pack(anchor="w", fill="x")
         self.btn = ttk.Button(btns, text="● Start recording", command=self.toggle)
         self.btn.pack(side="left", expand=True, fill="x")
         self.tray_btn = ttk.Button(btns, text="Minimize to tray", command=self.to_tray)
@@ -245,13 +256,36 @@ class App:
         return {"mic": mic_idx, "loopback": sys_idx,
                 "no_mic": mic_kind == "off", "no_system": sys_kind == "off"}
 
+    def on_stereo_toggle(self):
+        self.stereo_pref = self.stereo.get()
+
+    def update_channel_option(self, *_):
+        """Keep the 'separate channels' checkbox consistent with the selected sources.
+
+        Needs both a microphone and system audio. While either is set to Off the box is
+        unchecked and disabled (the recording is mono); once both are on again it returns to
+        the user's last choice.
+        """
+        mic_off = self.mic_map.get(self.mic_var.get(), ("", None))[0] == "off"
+        sys_off = self.sys_map.get(self.sys_var.get(), ("", None))[0] == "off"
+        if mic_off or sys_off:
+            self.stereo.set(False)
+            self.stereo_cb.state(["disabled"])
+        else:
+            self.stereo.set(self.stereo_pref)
+            if not self.recording:
+                self.stereo_cb.state(["!disabled"])
+
     def set_controls(self, enabled: bool):
         state = "readonly" if enabled else "disabled"
         self.mic_box.config(state=state)
         self.sys_box.config(state=state)
         self.refresh_btn.state(["!disabled"] if enabled else ["disabled"])
         self.duck_cb.state(["!disabled"] if enabled else ["disabled"])
-        self.stereo_cb.state(["!disabled"] if enabled else ["disabled"])
+        if enabled:
+            self.update_channel_option()   # enabled only when both sources are on
+        else:
+            self.stereo_cb.state(["disabled"])
 
     # ── Recording ───────────────────────────────────────────────────────────────
     def toggle(self):

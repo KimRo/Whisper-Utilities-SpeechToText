@@ -56,7 +56,8 @@ Double-click **`scripts\create_shortcut.bat`** to create a *Meeting Recorder* sh
 Normally both sources are mixed into one mono track, so it is no longer known who was on the microphone and who was on the system audio (the remote participants in Teams and similar apps). With `--separate-channels`, or the GUI checkbox **"Keep mic and system audio on separate channels"** (on by default), the MP3 is stereo: microphone on the left, system audio on the right. `transcribe_file.py` reads it exactly as before, and `transcribe_speakers.py` uses it to label your own voice as **You** (see [transcribe_speakers.md](transcribe_speakers.md)).
 
 - The file is larger: 96 kbps instead of 64 kbps.
-- It only applies when both a microphone and system audio are recorded.
+- It only applies when both a microphone and system audio are recorded. In the window, the checkbox is unchecked and disabled while either source is set to **Off** (the recording is mono) and returns to your last choice when both are on again. On the command line, `--separate-channels` together with `--no-mic` or `--no-system` prints a note and records mono.
+- With **Hybrid meeting** ducking also on, the microphone channel is recorded quieter while remote audio plays, so you talking over a remote participant may not be recognised as "You".
 - Use headphones. With speakers, the remote voices are picked up again by the microphone, which makes them look like you.
 
 ## Hybrid meetings (`--duck` / GUI checkbox)
