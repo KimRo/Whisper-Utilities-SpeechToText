@@ -1,6 +1,6 @@
 # record_meeting.py
 
-Records a live meeting: your **microphone** and the **system audio** (the other participants in Teams, Zoom, Meet, ...) are mixed into one mono 16 kHz MP3. Nothing is transcribed while recording. When you stop, the script offers to transcribe the MP3 with [transcribe_file.py](transcribe_file.md).
+Records a live meeting: your **microphone** and the **system audio** (the other participants in Teams, Zoom, Meet, ...) are mixed into one mono 16 kHz MP3 (or, with separate channels, kept apart in one stereo MP3). Nothing is transcribed while recording. When you stop, the script offers to transcribe the MP3 with [transcribe_file.py](transcribe_file.md).
 
 Windows only. System audio is captured with WASAPI loopback via `PyAudioWPatch`; MP3 encoding uses PyAV (installed with `faster-whisper`), so ffmpeg is not required.
 
@@ -37,11 +37,17 @@ Stop recording with **Enter** or **Ctrl+C**. While recording, the elapsed time a
 
 ## Output
 
-Recordings are saved to the repo-root `recordings\` folder as `<YYYY-MM-DD_HH-MM-SS>_<name>.mp3` (mono, 16 kHz, 64 kbps — roughly 30 MB per hour). Transcripts end up in `transcripts\` as usual.
+Recordings are saved to the repo-root `recordings\` folder as `<YYYY-MM-DD_HH-MM-SS>_<name>.mp3` (16 kHz; mono at 64 kbps, about 30 MB per hour, or stereo at 96 kbps, about 43 MB per hour, with separate channels). Transcripts end up in `transcripts\` as usual.
 
 ## GUI and shortcut
 
-`scripts/record_meeting_gui.py` is a small window with a timer, level meters for both sources, a Start/Stop button, a "Transcribe after stopping" checkbox and language/model pickers (defaults `nl` / `medium`). Two dropdowns list the detected **microphones** and **system-audio (loopback) devices**: each defaults to the Windows default device and can be set to *Off*; **Refresh devices** rescans (for example after plugging in a headset). The dropdowns are locked while recording. **Minimize to tray**, or the window's own minimize button, hides it in the system tray instead of the taskbar (grey icon = idle, red = recording; right-click for Show / Start / Stop / Quit). Closing the window while recording also moves it to the tray; closing it while idle quits. Transcription (after stopping, or via **Transcribe a recording…**) runs hidden in the background: the **Status** box at the bottom shows the current step and elapsed time, then a green *Transcription finished* line with the saved file name, or a red *Transcription failed* line with the error. When it ends, the window comes to the front again, also from the tray. Several transcriptions can run at once. Because there is no console, the speaker transcription cannot ask for a Hugging Face token: set `HF_TOKEN` first (see [transcribe_speakers.md](transcribe_speakers.md)), otherwise it fails with a message saying so. If you quit the window while a transcription is running, it keeps running hidden and still saves the transcript.
+`scripts/record_meeting_gui.py` is a small window with a timer, level meters for both sources and a Start/Stop button.
+
+- **Devices:** two dropdowns list the detected **microphones** and **system-audio (loopback) devices**. Each defaults to the Windows default device and can be set to *Off*; **Refresh devices** rescans (for example after plugging in a headset). They are locked while recording.
+- **Transcription:** a "Transcribe after stopping" checkbox, language and model pickers (defaults `nl` / `medium`), and a choice between **Normal** and **With speakers** (speaker labels, see [transcribe_speakers.md](transcribe_speakers.md)). Because there is no console, the speaker transcription cannot ask for a Hugging Face token: set `HF_TOKEN` first, otherwise it fails with a message saying so.
+- **Transcribe a recording...:** transcribes any existing audio file with the same settings.
+- **Background transcription:** it runs hidden. The **Status** box at the bottom shows the current step and elapsed time, then a green *Transcription finished* line with the saved file name, or a red *Transcription failed* line with the error. When it ends, the window comes to the front again, also from the tray. Several transcriptions can run at once. If you quit the window meanwhile, the transcription keeps running hidden and still saves the transcript.
+- **Tray:** **Minimize to tray**, or the window's own minimize button, hides it in the system tray instead of the taskbar (grey icon = idle, red = recording; right-click for Show / Start / Stop / Quit). Closing the window while recording also moves it to the tray; closing it while idle quits.
 
 **Start-up check.** When the window opens it checks which packages are installed and greys out what cannot work, listing what is missing in the Status box (the check only looks whether the packages exist; it does not load them):
 
@@ -49,7 +55,7 @@ Recordings are saved to the repo-root `recordings\` folder as `<YYYY-MM-DD_HH-MM
 |---|---|
 | PyAudioWPatch, PyAV (`av`) or NumPy | Everything for recording: Start, the device pickers, Refresh, the hybrid-meeting and separate-channel checkboxes |
 | faster-whisper, PyAV or NumPy | All transcription: "Transcribe after stopping", Normal / With speakers, language and model, "Transcribe a recording…" |
-| pyannote.audio, PyTorch, or a Hugging Face token (`HF_TOKEN` or `huggingface-cli login`) | Only "With speakers" |
+| pyannote.audio, PyTorch, or a Hugging Face token (`HF_TOKEN` or `hf auth login`) | Only "With speakers" |
 | Pillow or pystray | The tray button and tray icon |
 
 Run `scripts\install.bat` to install missing packages. The same check, from the shared `scripts\requirements_check.py`, runs first in every command-line tool (`record_meeting.py`, `transcribe_file.py`, `transcribe_speakers.py`, `transcribe_tts.py`): instead of a Python traceback they stop at once with a message naming what is missing and how to install it. `record_meeting.py` also checks the transcription packages before recording, so a missing one is noticed up front (with `--transcribe yes` it stops; otherwise it records only and says so). Run `python scripts\requirements_check.py` at any time to see the full list; the installer runs it at the end.
@@ -66,7 +72,7 @@ Double-click **`scripts\create_shortcut.bat`** to create a *Meeting Recorder* sh
 
 Normally both sources are mixed into one mono track, so it is no longer known who was on the microphone and who was on the system audio (the remote participants in Teams and similar apps). With `--separate-channels`, or the GUI checkbox **"Keep mic and system audio on separate channels"** (on by default), the MP3 is stereo: microphone on the left, system audio on the right. `transcribe_file.py` reads it exactly as before, and `transcribe_speakers.py` uses it to label your own voice as **You** (see [transcribe_speakers.md](transcribe_speakers.md)).
 
-- The file is larger: 96 kbps instead of 64 kbps.
+- The file is larger: 96 kbps instead of 64 kbps (about 43 MB per hour instead of 30 MB).
 - It only applies when both a microphone and system audio are recorded. In the window, the checkbox is unchecked and disabled while either source is set to **Off** (the recording is mono) and returns to your last choice when both are on again. On the command line, `--separate-channels` together with `--no-mic` or `--no-system` prints a note and records mono.
 - With **Hybrid meeting** ducking also on, the microphone channel is recorded quieter while remote audio plays, so you talking over a remote participant may not be recognised as "You".
 - Use headphones. With speakers, the remote voices are picked up again by the microphone, which makes them look like you.

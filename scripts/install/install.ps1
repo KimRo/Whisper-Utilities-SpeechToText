@@ -107,6 +107,13 @@ if (-not $python) {
 
 Write-Info "Using Python: $python"
 
+# pyannote.audio 4.x (speaker labels) requires Python 3.11 or newer
+if ($pythonVersion -and ([version]"$pythonVersion" -lt [version]"3.11")) {
+    Write-Fail ("Python $pythonVersion is too old: Python 3.11 or newer is required " +
+                "(pyannote.audio 4.x). Install a newer one with: winget install Python.Python.3.13 " +
+                "and run the installer again.")
+}
+
 # --------------------------------------------------------------
 # 2. Upgrade pip
 # --------------------------------------------------------------

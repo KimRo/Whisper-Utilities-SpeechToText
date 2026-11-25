@@ -17,7 +17,7 @@ The pyannote models are gated on Hugging Face (free):
 2. Accept the terms on the model page: <https://huggingface.co/pyannote/speaker-diarization-community-1>
 3. Create a **read** token (Settings → Access Tokens) and make it available:
    - `setx HF_TOKEN hf_xxxxxxxx` (open a new terminal afterwards), or
-   - `huggingface-cli login`, or
+   - `hf auth login`, or
    - paste it when the script asks. A pasted token is used for that run only and is not saved.
 
 After the first download the models are cached and the script works offline.

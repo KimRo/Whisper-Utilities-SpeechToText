@@ -67,7 +67,7 @@ def module_available(name: str) -> bool:
 
 
 def has_hf_token() -> bool:
-    """A Hugging Face token in the environment or saved by `huggingface-cli login`."""
+    """A Hugging Face token in the environment or saved by `hf auth login`."""
     if os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN"):
         return True
     try:
@@ -135,7 +135,7 @@ def fix_hint(missing: dict[str, list[str]], pip: bool = True) -> list[str]:
         text = f"Run {INSTALLER} to install the missing packages"
         lines.insert(0, f"{text}, or: python -m pip install {' '.join(specs)}" if pip else f"{text}.")
     if HF_TOKEN_MISSING in names:
-        lines.append("Hugging Face token: set HF_TOKEN or run `huggingface-cli login` "
+        lines.append("Hugging Face token: set HF_TOKEN or run `hf auth login` "
                      "(see doc/transcribe_speakers.md).")
     return lines
 

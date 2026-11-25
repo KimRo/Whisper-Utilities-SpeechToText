@@ -2,7 +2,7 @@
 
 > All code in this project was generated during a vibe coding session with [Claude Code](https://claude.ai/code) with almost zero user programming involved.
 
-Two offline speech-to-text tools powered by [faster-whisper](https://github.com/SYSTRAN/faster-whisper) (OpenAI Whisper). All processing happens locally — no internet connection required after the model is downloaded.
+Offline speech-to-text tools powered by [faster-whisper](https://github.com/SYSTRAN/faster-whisper) (OpenAI Whisper). All processing happens locally — no internet connection required after the model is downloaded.
 
 | Script | Purpose |
 |---|---|
@@ -19,7 +19,7 @@ Double-click **`scripts\install.bat`** — it handles everything automatically.
 
 What the installer does:
 
-1. Checks for Python 3.10+ and installs it via `winget` if missing
+1. Picks the newest installed Python (3.11 or newer is required, for pyannote.audio 4.x; it stops with a message if only an older one is found) and installs Python 3.13 via `winget` if none is found
 2. Upgrades `pip`
 3. Shows your NVIDIA GPU (via `nvidia-smi`) and lets you pick the PyTorch build: CPU-only, CUDA 12.6 (default), 12.8 or 13.0
 4. Installs all Python dependencies and verifies imports
@@ -36,15 +36,16 @@ What the installer does:
 | `PyAudioWPatch` | WASAPI loopback capture of system audio (meeting recorder) |
 | `pystray` | System-tray icon for the meeting recorder GUI (Pillow is installed with it) |
 | `numpy` | Audio buffer processing |
+| `ctranslate2` | Inference engine used by faster-whisper (installed explicitly so the CUDA build is used) |
 | `torchaudio` (2.11.0) | Installed with `torch`, same version and index (required by pyannote.audio) |
 | `pyannote.audio` (4.1.1) | Speaker diarization for `transcribe_speakers.py` (needs torch 2.8+) |
 | `av` (below 19) | Audio decoding/encoding (PyAV); 19 breaks the current faster-whisper |
 
-> Both scripts fall back to CPU automatically if CUDA is unavailable at runtime.
+> The tools fall back to CPU automatically if CUDA is unavailable at runtime.
 
 ## Models
 
-Whisper models are **multilingual** — a single model handles all 99 supported languages. There are no per-language downloads; language is a runtime setting only.
+Whisper models are **multilingual** — a single model handles all its languages (the tools accept 28 language codes, see the docs). There are no per-language downloads; language is a runtime setting only.
 
 | Model | Disk | Speed | Accuracy |
 |---|---|---|---|
@@ -71,6 +72,15 @@ python scripts/transcribe_file.py recording.mp3
 
 # Record a meeting (mic + system audio), stop with Enter, then transcribe
 python scripts/record_meeting.py -o weekly-sync
+
+# Transcribe with speaker labels (needs a free Hugging Face token, see the doc)
+python scripts/transcribe_speakers.py meeting.mp3
+
+# The meeting recorder as a window with a tray icon
+python scripts/record_meeting_gui.py
+
+# Check what is installed
+python scripts/requirements_check.py
 ```
 
 ## Sample
@@ -85,6 +95,8 @@ It downloads the recording of Martin Luther King Jr.'s *"I Have a Dream"* speech
 - [transcribe_file.py](doc/transcribe_file.md) — audio file transcriber
 - [transcribe_speakers.py](doc/transcribe_speakers.md) — transcriber with speaker labels
 - [record_meeting.py](doc/record_meeting.md) — meeting recorder
+
+To remove everything again, run `scripts\uninstall.bat`.
 
 ## License
 

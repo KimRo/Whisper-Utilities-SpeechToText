@@ -17,7 +17,7 @@ One-time setup (the pyannote models are gated on Hugging Face):
          https://huggingface.co/pyannote/speaker-diarization-community-1
     3. Create a read token (Settings > Access Tokens) and set it:
          setx HF_TOKEN hf_xxxxxxxx        (then open a new terminal)
-       or run `huggingface-cli login`, or just paste it when the script asks
+       or run `hf auth login`, or just paste it when the script asks
        (a pasted token is used for this run only and is not saved).
     After the first download the models are cached and work offline.
 
@@ -309,7 +309,7 @@ def find_hf_token() -> str | None:
     token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
     if token:
         return token
-    try:  # token saved by `huggingface-cli login`
+    try:  # token saved by `hf auth login`
         from huggingface_hub import get_token
         return get_token()
     except Exception:
@@ -351,7 +351,7 @@ def load_diarizer(force_cpu: bool):
                 error = exc
 
     if pipeline is None:
-        hint = ("No token was found: set HF_TOKEN or run `huggingface-cli login`."
+        hint = ("No token was found: set HF_TOKEN or run `hf auth login`."
                 if token is None else
                 f"Check that you accepted the terms for {DIARIZATION_MODEL} "
                 "on huggingface.co, and that the token is valid.")

@@ -12,10 +12,10 @@ Usage (interactive — omit the audio file to be prompted for all options):
     python scripts/transcribe_file.py
 
 Options:
-    -l, --language   Language code: en or nl (default: nl)
+    -l, --language   Language code, e.g. en, nl, fr, de (28 supported; default: nl)
     -o, --output     Output base name (default: input stem). Always saved to the
                      transcripts folder as <YYYY-MM-DD_HH-MM-SS>_<name>.txt
-    --model          Whisper model size: tiny/base/small/medium/large-v2 (default: small)
+    --model          Whisper model size: tiny/base/small/medium/large-v2/large-v3 (default: small)
     --cpu            Force CPU even if CUDA is available
 """
 

@@ -76,11 +76,11 @@ python scripts/transcribe_file.py audio.mp3 --cpu
 
 ## Supported audio formats
 
-Any format supported by `soundfile` and `ffmpeg`: `.wav`, `.mp3`, `.m4a`, `.flac`, `.ogg`, `.mp4`, and more.
+Any format PyAV (installed with `faster-whisper`, no separate ffmpeg needed) can decode: `.wav`, `.mp3`, `.m4a`, `.flac`, `.ogg`, `.mp4`, and more.
 
 ## Language codes
 
-Any of the 99 Whisper-supported language codes work with `-l`. Common examples:
+`-l` takes a language code. Common examples:
 
 | Code | Language | Code | Language |
 |---|---|---|---|
@@ -91,7 +91,9 @@ Any of the 99 Whisper-supported language codes work with `-l`. Common examples:
 | `zh` | Chinese | `ja` | Japanese |
 | `ko` | Korean | `ar` | Arabic |
 
-For the full list, choose `O` at the language prompt or pass any valid Whisper language code with `-l`.
+Whisper itself knows about 99 languages, but these tools accept the 28 codes above (the list behind option `O` at the language prompt). Any other code, such as `af`, is rejected with "unknown language".
+
+All accepted codes: `ar` `cs` `da` `de` `el` `en` `es` `fi` `fr` `he` `hi` `hu` `id` `it` `ja` `ko` `nl` `no` `pl` `pt` `ro` `ru` `sv` `th` `tr` `uk` `vi` `zh`.
 
 ## Model notes
 

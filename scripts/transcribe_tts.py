@@ -2,9 +2,7 @@
 """
 Whisper Live Transcriber — push-to-talk speech-to-text
 
-Install (run once in PowerShell):
-    pip install faster-whisper sounddevice soundfile pynput numpy
-    pip install torch --index-url https://download.pytorch.org/whl/cu121
+Install: run scripts/install.bat (faster-whisper, PyTorch with the right CUDA build, ...)
 
 Run:
     python scripts/transcribe_tts.py                      # Dutch, system default mic, small model
@@ -377,7 +375,7 @@ def show_cache_overview() -> None:
             print(f"\n  {_DIM}Not cached: {', '.join(not_cached)}{_R}")
 
     print()
-    print(f"  {_DIM}Note: Whisper models are multilingual — each model supports all 99 languages.")
+    print(f"  {_DIM}Note: Whisper models are multilingual — each model supports all its languages.")
     print(f"  Disk usage is per model only; language is a runtime setting, not a separate download.{_R}")
     print()
 
@@ -489,7 +487,7 @@ def main() -> None:
     if args.language is not None:
         lang = LANG_ALIASES.get(args.language.lower())
         if lang is None:
-            print(f"{_RD}Error: unknown language '{args.language}'. Use 'en' or 'nl'.{_R}", file=sys.stderr)
+            print(f"{_RD}Error: unknown language '{args.language}'. Use a code such as en, nl, fr, de.{_R}", file=sys.stderr)
             sys.exit(1)
         lang_code = lang
     else:

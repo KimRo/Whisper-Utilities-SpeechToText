@@ -3,7 +3,7 @@
 Meeting Recorder — record microphone + system audio (Windows) to an MP3
 
 Records your microphone and everything playing through your speakers/headset
-(the other participants in Teams/Zoom/Meet), mixes both into one mono 16 kHz MP3,
+(the other participants in Teams/Zoom/Meet), mixes both into one mono 16 kHz MP3 (or a stereo one, see --separate-channels),
 and afterwards offers to transcribe it with transcribe_file.py.
 Nothing is transcribed while recording.
 

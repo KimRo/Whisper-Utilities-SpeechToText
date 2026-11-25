@@ -74,7 +74,7 @@ The file is created at startup and each kept fragment is appended immediately, s
 
 ## Language codes
 
-All 99 languages Whisper supports work via `-l`. Common codes:
+`-l` takes a language code. Common codes:
 
 | Code | Language | Code | Language |
 |---|---|---|---|
@@ -85,7 +85,9 @@ All 99 languages Whisper supports work via `-l`. Common codes:
 | `zh` | Chinese | `ja` | Japanese |
 | `ko` | Korean | `ar` | Arabic |
 
-For the full list, choose `O` at the language prompt or pass any valid Whisper language code with `-l`.
+Whisper itself knows about 99 languages, but these tools accept the 28 codes above (the list behind option `O` at the language prompt). Any other code, such as `af`, is rejected with "unknown language".
+
+All accepted codes: `ar` `cs` `da` `de` `el` `en` `es` `fi` `fr` `he` `hi` `hu` `id` `it` `ja` `ko` `nl` `no` `pl` `pt` `ro` `ru` `sv` `th` `tr` `uk` `vi` `zh`.
 
 ## Model notes
 
