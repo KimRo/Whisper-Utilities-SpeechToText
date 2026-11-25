@@ -260,6 +260,14 @@ Set-Content -Path $tmp -Value $verify -Encoding UTF8
 & $python $tmp
 Remove-Item $tmp
 
+# Every package the tools need (recording, transcription, speakers, live, tray) in one list
+Write-Step "Checking that all packages are in place"
+$check = Join-Path (Split-Path -Parent $PSScriptRoot) "requirements_check.py"
+& $python $check
+if ($LASTEXITCODE -ne 0) {
+    Write-Warn "Some packages are missing (see the list above). Run this installer again, or install them with the pip command shown."
+}
+
 # --------------------------------------------------------------
 # DONE
 # --------------------------------------------------------------

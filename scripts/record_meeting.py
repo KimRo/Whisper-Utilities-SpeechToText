@@ -49,6 +49,8 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+import requirements_check
+
 try:
     import av
 except ImportError:      # the GUI checks for this at start-up and disables recording
@@ -110,11 +112,13 @@ except ImportError:      # the GUI checks for this at start-up and disables reco
 
 def require_recording_packages() -> None:
     """Command line: stop with a clear message when a recording package is missing."""
-    missing = [name for name, mod in (("PyAudioWPatch", pyaudio), ("PyAV (av)", av),
+    requirements_check.require("record", tool="record_meeting.py")
+    # Installed but not importable (a broken install): the modules above are then None.
+    missing = [name for name, mod in (("PyAudioWPatch", pyaudio), ("PyAV", av),
                                       ("NumPy", np)) if mod is None]
     if missing:
-        fail(f"Cannot record: {', '.join(missing)} not installed. "
-             f"Run scripts\\install.bat, or: python -m pip install PyAudioWPatch \"av<19\" numpy")
+        fail(f"Cannot record: {', '.join(missing)} could not be imported. "
+             f"Try reinstalling with scripts\\install.bat")
 
 
 # ── Devices ─────────────────────────────────────────────────────────────────────
@@ -399,6 +403,13 @@ def main() -> None:
         info(f"{_OR}--separate-channels needs both a microphone and system audio; "
              f"recording mono.{_R}")
         args.separate_channels = False
+    tx_missing = requirements_check.check("transcribe")["transcribe"]
+    if tx_missing and args.transcribe != "no":
+        if args.transcribe == "yes":
+            requirements_check.require("transcribe", tool="record_meeting.py --transcribe yes")
+        info(f"{_OR}Note: transcription is unavailable (missing {', '.join(tx_missing)}), so this "
+             f"only records. Run scripts\\install.bat to install it.{_R}")
+        args.transcribe = "no"
 
     pa = pyaudio.PyAudio()
     if args.list_devices:

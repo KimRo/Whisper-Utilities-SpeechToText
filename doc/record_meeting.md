@@ -48,11 +48,11 @@ Recordings are saved to the repo-root `recordings\` folder as `<YYYY-MM-DD_HH-MM
 | Missing | Greyed out |
 |---|---|
 | PyAudioWPatch, PyAV (`av`) or NumPy | Everything for recording: Start, the device pickers, Refresh, the hybrid-meeting and separate-channel checkboxes |
-| faster-whisper | All transcription: "Transcribe after stopping", Normal / With speakers, language and model, "Transcribe a recording…" |
+| faster-whisper, PyAV or NumPy | All transcription: "Transcribe after stopping", Normal / With speakers, language and model, "Transcribe a recording…" |
 | pyannote.audio, PyTorch, or a Hugging Face token (`HF_TOKEN` or `huggingface-cli login`) | Only "With speakers" |
 | Pillow or pystray | The tray button and tray icon |
 
-Run `scripts\install.bat` to install missing packages. The command-line recorder (`record_meeting.py`) stops with a clear message if a recording package is missing.
+Run `scripts\install.bat` to install missing packages. The same check, from the shared `scripts\requirements_check.py`, runs first in every command-line tool (`record_meeting.py`, `transcribe_file.py`, `transcribe_speakers.py`, `transcribe_tts.py`): instead of a Python traceback they stop at once with a message naming what is missing and how to install it. `record_meeting.py` also checks the transcription packages before recording, so a missing one is noticed up front (with `--transcribe yes` it stops; otherwise it records only and says so). Run `python scripts\requirements_check.py` at any time to see the full list; the installer runs it at the end.
 
 ```powershell
 python scripts/record_meeting_gui.py                       # open the window

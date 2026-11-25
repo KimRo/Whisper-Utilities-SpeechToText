@@ -45,7 +45,10 @@ def _prepare_cuda_dlls() -> None:
 
 _prepare_cuda_dlls()
 
-from faster_whisper import WhisperModel  # noqa: E402 (after _prepare_cuda_dlls)
+import requirements_check  # noqa: E402
+requirements_check.require("transcribe", tool="transcribe_file.py")  # clear message, no traceback
+
+from faster_whisper import WhisperModel  # noqa: E402 (after the checks above)
 
 # Repo-root "transcripts" folder (same location for all scripts)
 TRANSCRIPT_DIR = Path(__file__).resolve().parent.parent / "transcripts"

@@ -9,6 +9,7 @@ Two offline speech-to-text tools powered by [faster-whisper](https://github.com/
 | `scripts/transcribe_tts.py` | Push-to-talk live transcriber — hold Space to record, release to transcribe |
 | `scripts/transcribe_file.py` | Batch file transcriber — transcribe an existing audio file from the command line |
 | `scripts/transcribe_speakers.py` | Speaker-labelled transcriber — transcribes a file and marks who says what (`Speaker 1`, `Speaker 2`, ...); needs a one-time free Hugging Face token, see [doc](doc/transcribe_speakers.md) |
+| `scripts/requirements_check.py` | Lists which packages are installed and which are missing. Every tool runs this check first and stops with a clear message instead of a traceback; the installer runs it at the end |
 | `scripts/record_meeting.py` | Meeting recorder — records microphone + system audio to MP3, then offers to transcribe it |
 | `scripts/record_meeting_gui.py` | Window + system-tray version of the meeting recorder; after stopping it can transcribe normally or with speaker labels (choose in the window), and can keep your microphone and the system audio on separate channels so your own voice is labelled "You"; "Transcribe a recording…" transcribes any existing audio file with those same settings; `scripts\create_shortcut.bat` makes a one-click Desktop/Start Menu shortcut |
 

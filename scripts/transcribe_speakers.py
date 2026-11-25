@@ -61,6 +61,8 @@ from pathlib import Path
 import logging
 import warnings
 
+import requirements_check
+
 # Known harmless messages from torch/pyannote that only bury the useful output. Each filter
 # matches one specific message; every other warning is still shown.
 logging.getLogger("torch.utils.flop_counter").setLevel(logging.ERROR)   # "triton not found" (no Triton on Windows)
@@ -318,8 +320,8 @@ def load_diarizer(force_cpu: bool):
     try:
         from pyannote.audio import Pipeline
         import torch
-    except ImportError:
-        fail("pyannote.audio is not installed. Run:  pip install \"pyannote.audio>=4,<5\"")
+    except ImportError as exc:
+        fail(f"Could not load pyannote.audio or PyTorch ({exc}). Run scripts\\install.bat")
 
     token = find_hf_token()
     print(f"{_CY}Loading speaker model '{DIARIZATION_MODEL}'...{_R}", file=sys.stderr)
@@ -338,7 +340,7 @@ def load_diarizer(force_cpu: bool):
 
     # Only ask for a token when none was found at all; any other failure (version
     # mismatch, network, terms not accepted) is reported as-is instead of prompting.
-    if pipeline is None and token is None and sys.stdin.isatty():
+    if pipeline is None and token is None and requirements_check.is_interactive():
         print(f"{_OR}No Hugging Face token found (see the setup steps at the top of this "
               f"script).{_R}", file=sys.stderr)
         token = getpass.getpass("Paste Hugging Face token (not saved, Enter to abort): ").strip()
@@ -545,6 +547,11 @@ def main() -> None:
             stream.reconfigure(encoding="utf-8", errors="replace")
         except (AttributeError, ValueError):
             pass
+
+    # Fail fast with a clear message, before any model is loaded. The Hugging Face token is only
+    # required up front when nobody can be asked for it (no terminal).
+    requirements_check.require("transcribe", "speakers", token=not requirements_check.is_interactive(),
+                               tool="transcribe_speakers.py")
 
     if args.audio is None:
         # ── Interactive mode ──────────────────────────────────────────────────

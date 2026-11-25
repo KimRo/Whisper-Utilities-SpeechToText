@@ -28,7 +28,6 @@ from __future__ import annotations
 
 import argparse
 import ctypes
-import importlib.util
 import os
 import queue
 import re
@@ -47,6 +46,7 @@ except ImportError:
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import record_meeting as rm  # importable even when its recording packages are missing
+import requirements_check as rc
 
 try:
     import pystray
@@ -61,49 +61,11 @@ ANSI = re.compile(r"\x1b\[[0-9;]*m")                     # colour codes in the s
 STAGES = ("Loading", "Transcribing", "Identifying", "Language")   # progress lines worth showing
 TX_COLORS = {"busy": "#555555", "ok": "#1a7f37", "fail": "#c62828"}
 
-# What each feature needs: (name shown to the user, importable module)
-REQUIREMENTS = {
-    "record": [("PyAudioWPatch", "pyaudiowpatch"), ("PyAV", "av"), ("NumPy", "numpy")],
-    "transcribe": [("faster-whisper", "faster_whisper")],
-    "speakers": [("pyannote.audio", "pyannote.audio"), ("PyTorch", "torch")],
-    "tray": [("Pillow", "PIL"), ("pystray", "pystray")],
-}
-FEATURE_TITLES = {
-    "record": "Recording unavailable",
-    "transcribe": "Transcription unavailable",
-    "speakers": "'With speakers' unavailable",
-    "tray": "Tray icon unavailable",
-}
-HF_TOKEN_MISSING = "Hugging Face token (set HF_TOKEN)"
-
-
-def module_available(name: str) -> bool:
-    """True when the module is installed (looked up without importing it, so it is fast)."""
-    try:
-        return importlib.util.find_spec(name) is not None
-    except (ImportError, ValueError, AttributeError):
-        return False
-
-
-def has_hf_token() -> bool:
-    """A Hugging Face token in the environment or saved by `huggingface-cli login`."""
-    if os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN"):
-        return True
-    try:
-        from huggingface_hub import get_token
-        return bool(get_token())
-    except Exception:  # noqa: BLE001 - huggingface_hub missing or unreadable: no token
-        return False
-
-
 def check_requirements() -> tuple[dict, dict]:
-    """Return (missing, available): missing[feature] lists names, available[feature] is a bool."""
-    missing = {feature: [name for name, mod in items if not module_available(mod)]
-               for feature, items in REQUIREMENTS.items()}
+    """Return (missing, available) for the features this window uses (see requirements_check)."""
+    missing = rc.check("record", "transcribe", "speakers", "tray", token=True)
     if pystray is None and not missing["tray"]:
         missing["tray"].append("pystray (failed to load)")
-    if not has_hf_token():
-        missing["speakers"].append(HF_TOKEN_MISSING)
     available = {
         "record": not missing["record"],
         "transcribe": not missing["transcribe"],
@@ -114,15 +76,9 @@ def check_requirements() -> tuple[dict, dict]:
 
 
 def missing_report(missing: dict) -> str:
-    """Text for the Status box: what is missing for which feature, and how to fix it."""
-    lines = [f"{FEATURE_TITLES[f]}: missing {', '.join(missing[f])}"
-             for f in FEATURE_TITLES if missing[f]]
-    packages = any(n != HF_TOKEN_MISSING for names in missing.values() for n in names)
-    if packages:
-        lines.append("Run scripts\\install.bat to install the missing packages.")
-    if HF_TOKEN_MISSING in missing["speakers"]:
-        lines.append("Set HF_TOKEN for 'With speakers' (see doc/transcribe_speakers.md).")
-    return "\n".join(lines)
+    return rc.missing_report(missing, pip=False)   # the window only points at the installer
+
+
 AUDIO_TYPES = [
     ("Audio and video files", "*.mp3 *.wav *.m4a *.flac *.ogg *.opus *.aac *.wma *.mp4 *.webm *.mkv"),
     ("All files", "*.*"),

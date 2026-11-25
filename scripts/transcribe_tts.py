@@ -44,6 +44,9 @@ def _prepare_cuda_dlls() -> None:
 
 _prepare_cuda_dlls()
 
+import requirements_check  # noqa: E402
+requirements_check.require("live", "transcribe", tool="transcribe_tts.py")  # clear message, no traceback
+
 import numpy as np
 import sounddevice as sd
 import soundfile as sf
