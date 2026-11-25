@@ -8,6 +8,7 @@ Two offline speech-to-text tools powered by [faster-whisper](https://github.com/
 |---|---|
 | `scripts/transcribe_tts.py` | Push-to-talk live transcriber — hold Space to record, release to transcribe |
 | `scripts/transcribe_file.py` | Batch file transcriber — transcribe an existing audio file from the command line |
+| `scripts/transcribe_speakers.py` | Speaker-labelled transcriber — transcribes a file and marks who says what (`Speaker 1`, `Speaker 2`, ...); needs a one-time free Hugging Face token, see [doc](doc/transcribe_speakers.md) |
 | `scripts/record_meeting.py` | Meeting recorder — records microphone + system audio to MP3, then offers to transcribe it |
 | `scripts/record_meeting_gui.py` | Window + system-tray version of the meeting recorder; `scripts\create_shortcut.bat` makes a one-click Desktop/Start Menu shortcut |
 
@@ -34,6 +35,8 @@ What the installer does:
 | `PyAudioWPatch` | WASAPI loopback capture of system audio (meeting recorder) |
 | `pystray` | System-tray icon for the meeting recorder GUI (Pillow is installed with it) |
 | `numpy` | Audio buffer processing |
+| `torchaudio` | Installed with `torch` from the same index (required by pyannote.audio) |
+| `pyannote.audio` (3.4.0) | Speaker diarization for `transcribe_speakers.py` (with `huggingface_hub` below 1.0) |
 
 > Both scripts fall back to CPU automatically if CUDA is unavailable at runtime.
 
@@ -78,6 +81,7 @@ It downloads the recording of Martin Luther King Jr.'s *"I Have a Dream"* speech
 
 - [transcribe_tts.py](doc/transcribe_tts.md) — live push-to-talk transcriber
 - [transcribe_file.py](doc/transcribe_file.md) — audio file transcriber
+- [transcribe_speakers.py](doc/transcribe_speakers.md) — transcriber with speaker labels
 - [record_meeting.py](doc/record_meeting.md) — meeting recorder
 
 ## License

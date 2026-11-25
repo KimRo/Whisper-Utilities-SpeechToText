@@ -45,8 +45,10 @@ if (-not $pythonCmd) {
 Write-Step "Removing installed Python packages"
 
 $packages = @(
+    'pyannote.audio',
     'faster-whisper',
     'ctranslate2',
+    'torchaudio',
     'torch',
     'sounddevice',
     'soundfile',

@@ -203,6 +203,20 @@ Write-Step "Installing PyTorch (this may take a while)"
 if ($LASTEXITCODE -ne 0) { Write-Fail "PyTorch install failed" }
 Write-OK "PyTorch installed"
 
+# torchaudio must match the installed torch build (same index and version).
+Write-Step "Installing torchaudio (matching PyTorch)"
+$torchVer = (& $python -c "import torch; print(torch.__version__)").Trim()
+$torchBase = $torchVer.Split('+')[0]
+& $python -m pip install "torchaudio==$torchBase" --index-url $cudaIndex
+if ($LASTEXITCODE -ne 0) { Write-Fail "torchaudio install failed" }
+Write-OK "torchaudio installed"
+
+# Constraints file: stops later packages (pyannote.audio) from replacing the
+# CUDA build of torch with a newer CPU-only build.
+$constraints = Join-Path $env:TEMP "whisper_torch_constraints.txt"
+$tavVer = (& $python -c "import torchaudio; print(torchaudio.__version__)").Trim()
+@("torch==$torchVer", "torchaudio==$tavVer") | Set-Content -Path $constraints -Encoding ascii
+
 # --------------------------------------------------------------
 # 6. Whisper dependencies
 # --------------------------------------------------------------
@@ -215,12 +229,14 @@ $packages = @(
     "soundfile",
     "pynput",
     "PyAudioWPatch",
-    "pystray"
+    "pystray",
+    "huggingface_hub<1.0",   # pyannote.audio 3.4.0 passes use_auth_token, removed in huggingface_hub 1.x
+    "pyannote.audio==3.4.0"
 )
 
 foreach ($p in $packages) {
     Write-Info "Installing $p"
-    & $python -m pip install $p
+    & $python -m pip install $p -c $constraints
     if ($LASTEXITCODE -ne 0) { Write-Fail "$p install failed" }
     Write-OK "$p installed"
 }
