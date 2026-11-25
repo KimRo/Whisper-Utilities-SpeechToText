@@ -25,6 +25,10 @@ Options:
     --no-system       Do not record system audio
     --duck            Hybrid meeting: lower the microphone while system audio plays, so
                       remote voices coming out of the room speaker are not recorded twice
+    --separate-channels
+                      Stereo MP3: microphone on the left channel, system audio on the right
+                      (instead of mixing both to mono). Lets transcribe_speakers.py label
+                      your own voice as "You". Needs both a microphone and system audio.
     --list-devices    Show available devices and exit
     --transcribe      ask | yes | no (default: ask) — run transcribe_file.py afterwards
     -l, --language    Passed to transcribe_file.py
@@ -52,6 +56,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 
 SAMPLE_RATE = 16000        # Whisper's native rate; plenty for speech
 MP3_BITRATE = 64000        # 64 kbps mono is small and clear for speech
+STEREO_BITRATE = 96000     # for --separate-channels (two independent channels)
 LATENCY = 0.5              # seconds the mixer stays behind real time
 TICK = 0.1                 # mixer interval in seconds
 
@@ -274,21 +279,27 @@ def transcribe_command(mp3_path: Path, name: str | None, language: str | None = 
 
 
 def record(sources: list[Source], mp3_path: Path, stop: threading.Event,
-           on_tick=None, duck: bool = False) -> float:
+           on_tick=None, duck: bool = False, stereo: bool = False) -> float:
     """Mix all sources and stream them into an MP3 until stop is set. Returns seconds.
 
     on_tick(elapsed_seconds, sources) is called ~10x/s; without it a console line is printed.
     duck: lower the microphone while system audio plays (hybrid meetings, see Ducker);
           only has an effect when both a "mic" and a "sys" source are recording.
+    stereo: keep the sources apart (microphone left, system audio right) instead of mixing
+          them to mono; only has an effect when both a "mic" and a "sys" source are recording.
     """
-    ducker = Ducker() if duck and {s.label for s in sources} >= {"mic", "sys"} else None
+    labels = {s.label for s in sources}
+    ducker = Ducker() if duck and labels >= {"mic", "sys"} else None
+    dual = stereo and labels >= {"mic", "sys"}
     out = av.open(str(mp3_path), "w")
     stream = out.add_stream("libmp3lame", rate=SAMPLE_RATE)
-    stream.layout = "mono"
-    stream.bit_rate = MP3_BITRATE
+    stream.layout = "stereo" if dual else "mono"
+    stream.bit_rate = STEREO_BITRATE if dual else MP3_BITRATE
 
     def write(samples: np.ndarray) -> None:
-        frame = av.AudioFrame.from_ndarray(samples.reshape(1, -1), format="s16", layout="mono")
+        # mono: shape (n,); stereo: shape (n, 2), written interleaved as L R L R ...
+        frame = av.AudioFrame.from_ndarray(samples.reshape(1, -1), format="s16",
+                                           layout="stereo" if dual else "mono")
         frame.sample_rate = SAMPLE_RATE
         for pkt in stream.encode(frame):
             out.mux(pkt)
@@ -308,10 +319,13 @@ def record(sources: list[Source], mp3_path: Path, stop: threading.Event,
                 parts = {s.label: s.take(n) for s in sources}
                 if ducker is not None:
                     parts["mic"] = ducker.process(parts["mic"], parts["sys"])
-                mix = np.zeros(n, dtype=np.int32)
-                for a in parts.values():
-                    mix += a
-                write(np.clip(mix, -32768, 32767).astype(np.int16))
+                if dual:
+                    write(np.column_stack((parts["mic"], parts["sys"])))
+                else:
+                    mix = np.zeros(n, dtype=np.int32)
+                    for a in parts.values():
+                        mix += a
+                    write(np.clip(mix, -32768, 32767).astype(np.int16))
                 emitted = target
                 if on_tick is not None:
                     on_tick(elapsed, sources)
@@ -353,6 +367,7 @@ def main() -> None:
     ap.add_argument("--no-mic", action="store_true")
     ap.add_argument("--no-system", action="store_true")
     ap.add_argument("--duck", action="store_true")
+    ap.add_argument("--separate-channels", action="store_true")
     ap.add_argument("--list-devices", action="store_true")
     ap.add_argument("--transcribe", choices=["ask", "yes", "no"], default="ask")
     ap.add_argument("-l", "--language")
@@ -394,7 +409,8 @@ def main() -> None:
 
     seconds = 0.0
     try:
-        seconds = record(sources, mp3_path, stop, duck=args.duck)
+        seconds = record(sources, mp3_path, stop, duck=args.duck,
+                         stereo=args.separate_channels)
     except KeyboardInterrupt:
         # record() closes and finalises the MP3 in its own finally block.
         print("", file=sys.stderr)

@@ -39,7 +39,28 @@ python scripts/transcribe_speakers.py            # interactive
 | `--cpu` | Force CPU |
 | `--speakers N` | Exact number of speakers (most effective accuracy hint) |
 | `--min-speakers N`, `--max-speakers N` | Bounds on the speaker count |
-| `--names A,B,C` | Names in order of first appearance |
+| `--names A,B,C` | Names for the remote speakers, in order of first appearance |
+| `--dual-channel auto\|on\|off` | Treat a stereo file as microphone (left) + system audio (right). `auto` (default) = on for 2-channel files |
+| `--me NAME` | Label for the microphone channel (default `You`) |
+
+## Meetings recorded with separate channels
+
+If the recording was made with **Keep mic and system audio on separate channels** (`record_meeting.py --separate-channels`, on by default in the GUI), the file is stereo: your microphone on the left, system audio (the other participants in Teams, Zoom and similar) on the right. The script then:
+
+- labels words where the microphone clearly dominates as **You** (or the `--me` name),
+- runs the speaker separation on the system-audio channel only, so the other participants are numbered `Speaker 1`, `Speaker 2`, ... without your voice mixed in.
+
+```
+[00:00:06] Speaker 1: Goedemorgen allemaal.
+[00:00:11] You: Goedemorgen, zullen we beginnen?
+```
+
+Things to know:
+
+- Everyone talking into your microphone gets the `You` label, for example all people sitting in your room.
+- Use headphones. With speakers, remote voices leak into the microphone channel and can be labelled `You`. The thresholds are `YOU_RATIO` and `YOU_MIN_RMS` at the top of the script.
+- A stereo file that did *not* come from this recorder would be misread as microphone/system audio; use `--dual-channel off` for those.
+- If you talk while remote audio plays and the hybrid-meeting ducking option was on, your microphone is recorded quieter and may count as remote.
 
 ## Limitations
 

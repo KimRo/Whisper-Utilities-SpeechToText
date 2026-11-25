@@ -38,6 +38,13 @@ Options:
     --speakers N     Exact number of speakers, if you know it (improves accuracy)
     --min-speakers N / --max-speakers N   Bounds on the number of speakers
     --names A,B,C    Names for the speakers, in order of first appearance
+    --dual-channel   auto | on | off (default: auto). A stereo file is treated as a
+                     "--separate-channels" recording from record_meeting.py: left = your
+                     microphone, right = system audio (the remote participants). Words where
+                     the microphone dominates are labelled "You"; only the right channel is
+                     split into Speaker 1, 2, ... auto = on for 2-channel files.
+    --me NAME        Label for the microphone channel (default: You). Everyone talking into
+                     that microphone, e.g. all people in your room, gets this label.
 
 Note: overlapping speech is assigned to a single speaker per word, so crosstalk
 is not separated perfectly. Speaker changes are snapped to sentence boundaries
@@ -51,6 +58,16 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+import logging
+import warnings
+
+# Known harmless messages from torch/pyannote that only bury the useful output. Each filter
+# matches one specific message; every other warning is still shown.
+logging.getLogger("torch.utils.flop_counter").setLevel(logging.ERROR)   # "triton not found" (no Triton on Windows)
+for _msg in (r"TensorFloat-32 \(TF32\) has been disabled",    # pyannote turns TF32 off on purpose
+             r"std\(\): degrees of freedom is <= 0"):          # pyannote pooling on very short/silent chunks
+    warnings.filterwarnings("ignore", message=_msg)
+
 # Repo-root "transcripts" folder (same location for all scripts)
 TRANSCRIPT_DIR = Path(__file__).resolve().parent.parent / "transcripts"
 
@@ -63,6 +80,14 @@ SAMPLE_RATE = 16000
 PAUSE_SPLIT = 0.8
 MIN_RUN = 2.0
 SENTENCE_END = (".", "?", "!", "…")
+
+# Dual-channel recordings (record_meeting.py --separate-channels): left = microphone, right =
+# system audio. A word is "You" when the microphone is clearly the louder channel. Without
+# headphones the speakers leak remote voices into the microphone; a higher YOU_RATIO helps.
+YOU_RATIO = 2.0          # microphone RMS must be at least this many times the system RMS
+YOU_MIN_RMS = 0.005      # ...and above this floor (about -46 dBFS), so silence never counts
+ME_LABEL = "You"
+YOU = "__YOU__"          # internal speaker label for the microphone channel
 
 # ── Colours ─────────────────────────────────────────────────────────────────────
 if sys.platform == "win32":
@@ -239,18 +264,19 @@ def transcribe_words(audio_path: Path, model, lang: str) -> list[tuple[float, fl
 
 
 # ── Diarization ──────────────────────────────────────────────────────────────────
-def load_audio_waveform(audio_path: Path):
-    """Decode any audio file to a 16 kHz mono float tensor (1, n) using PyAV.
+def load_audio_channels(audio_path: Path):
+    """Decode any audio file to 16 kHz float32 with shape (channels, n) using PyAV.
 
-    Passing a waveform avoids pyannote/torchaudio needing its own audio backend.
+    channels is 1 for mono files and 2 for stereo (or more) files. Passing a waveform to
+    pyannote avoids it needing its own audio backend.
     """
     import av
     import numpy as np
-    import torch
 
-    resampler = av.AudioResampler(format="fltp", layout="mono", rate=SAMPLE_RATE)
     chunks = []
     with av.open(str(audio_path)) as container:
+        layout = "stereo" if container.streams.audio[0].channels >= 2 else "mono"
+        resampler = av.AudioResampler(format="fltp", layout=layout, rate=SAMPLE_RATE)
         for frame in container.decode(audio=0):
             for out in resampler.resample(frame):
                 chunks.append(out.to_ndarray())
@@ -258,8 +284,23 @@ def load_audio_waveform(audio_path: Path):
             chunks.append(out.to_ndarray())
     if not chunks:
         fail(f"no audio could be decoded from {audio_path}")
-    wave = np.concatenate(chunks, axis=1).astype("float32")
-    return torch.from_numpy(wave)
+    return np.concatenate(chunks, axis=1).astype("float32")
+
+
+def _rms(x) -> float:
+    import numpy as np
+    return float(np.sqrt(np.mean(np.square(x)))) if len(x) else 0.0
+
+
+def detect_you(words, mic, system) -> list[bool]:
+    """Per word: True when the microphone channel clearly dominates (see YOU_RATIO)."""
+    flags = []
+    for start, end, _ in words:
+        a = int(start * SAMPLE_RATE)
+        b = max(int(end * SAMPLE_RATE), a + 1)
+        m, s = _rms(mic[a:b]), _rms(system[a:b])
+        flags.append(m >= YOU_MIN_RMS and m >= YOU_RATIO * s)
+    return flags
 
 
 def find_hf_token() -> str | None:
@@ -327,10 +368,15 @@ def load_diarizer(force_cpu: bool):
     return pipeline
 
 
-def diarize(audio_path: Path, pipeline, num_speakers, min_speakers, max_speakers):
-    """Return [(start, end, speaker_label), ...] sorted by start time."""
+def diarize(samples, pipeline, num_speakers, min_speakers, max_speakers):
+    """Return [(start, end, speaker_label), ...] sorted by start time.
+
+    samples: 16 kHz mono float32 numpy array, shape (n,).
+    """
+    import torch
+
     print(f"{_CY}Identifying speakers ...{_R}", file=sys.stderr)
-    waveform = load_audio_waveform(audio_path)
+    waveform = torch.from_numpy(samples.reshape(1, -1))
     kwargs = {}
     if num_speakers:
         kwargs["num_speakers"] = num_speakers
@@ -412,14 +458,21 @@ def snap_to_sentences(words, speakers: list[str]) -> list[str]:
     return result
 
 
-def build_paragraphs(words, turns) -> list[tuple[float, str, str]]:
-    """Group consecutive words of the same speaker -> [(start, raw_label, text), ...]."""
+def build_paragraphs(words, turns, you=None) -> list[tuple[float, str, str]]:
+    """Group consecutive words of the same speaker -> [(start, raw_label, text), ...].
+
+    you: optional per-word flags (see detect_you); flagged words are the microphone speaker
+    and bypass the diarization turns, which only describe the remote participants.
+    """
     speakers: list[str] = []
-    current = None
-    for start, end, _ in words:
-        spk = speaker_for_word(start, end, turns, current) or "SPEAKER_00"
+    remote = None
+    for i, (start, end, _) in enumerate(words):
+        if you is not None and you[i]:
+            speakers.append(YOU)
+            continue
+        spk = speaker_for_word(start, end, turns, remote) or "SPEAKER_00"
         speakers.append(spk)
-        current = spk
+        remote = spk
     speakers = snap_to_sentences(words, speakers)
 
     paragraphs: list[tuple[float, str, list[str]]] = []
@@ -431,13 +484,16 @@ def build_paragraphs(words, turns) -> list[tuple[float, str, str]]:
     return [(st, spk, "".join(ws).strip()) for st, spk, ws in paragraphs]
 
 
-def label_speakers(paragraphs, names: list[str] | None) -> dict[str, str]:
-    """Raw pyannote labels -> 'Speaker N' (or given names) by order of first appearance."""
+def label_speakers(paragraphs, names: list[str] | None, me: str = ME_LABEL) -> dict[str, str]:
+    """Raw labels -> 'Speaker N' (or given names) by order of first appearance.
+
+    The microphone speaker (YOU) is labelled `me` and is not part of the numbering/names.
+    """
     order: list[str] = []
     for _, spk, _ in paragraphs:
-        if spk not in order:
+        if spk != YOU and spk not in order:
             order.append(spk)
-    labels = {}
+    labels = {YOU: me}
     for i, spk in enumerate(order):
         labels[spk] = names[i] if names and i < len(names) else f"Speaker {i + 1}"
     if names and len(names) < len(order):
@@ -474,7 +530,13 @@ def main() -> None:
     parser.add_argument("--min-speakers", type=int, default=None, help="Minimum number of speakers")
     parser.add_argument("--max-speakers", type=int, default=None, help="Maximum number of speakers")
     parser.add_argument("--names", default=None,
-                        help="Comma-separated names, in order of first appearance")
+                        help="Comma-separated names for the remote speakers, in order of "
+                             "first appearance")
+    parser.add_argument("--dual-channel", choices=["auto", "on", "off"], default="auto",
+                        help="Treat a stereo file as microphone (left) + system audio (right); "
+                             "auto = on for 2-channel files")
+    parser.add_argument("--me", default=ME_LABEL,
+                        help=f"Label for the microphone channel (default: {ME_LABEL})")
     args = parser.parse_args()
 
     # Redirected stdout on Windows may use a legacy codepage; never crash on printing.
@@ -500,6 +562,7 @@ def main() -> None:
         output_path = prompt_output(audio_path)
         print()
         force_cpu = False
+        dual_mode, me_label = "auto", ME_LABEL
     else:
         # ── Command-line mode ─────────────────────────────────────────────────
         audio_path = args.audio.resolve()
@@ -514,6 +577,7 @@ def main() -> None:
         force_cpu = args.cpu
         num_speakers, min_speakers, max_speakers = args.speakers, args.min_speakers, args.max_speakers
         names = parse_names(args.names)
+        dual_mode, me_label = args.dual_channel, args.me
 
     # Load the diarizer first so a missing token fails fast, before the slow transcription.
     pipeline = load_diarizer(force_cpu)
@@ -524,9 +588,34 @@ def main() -> None:
         print(f"{_OR}No speech detected.{_R}", file=sys.stderr)
         sys.exit(0)
 
-    turns = diarize(audio_path, pipeline, num_speakers, min_speakers, max_speakers)
-    paragraphs = build_paragraphs(words, turns)
-    text = render(paragraphs, label_speakers(paragraphs, names))
+    channels = load_audio_channels(audio_path)
+    if dual_mode == "on" and channels.shape[0] != 2:
+        fail("--dual-channel on needs a stereo file (left = microphone, right = system audio).")
+    dual = channels.shape[0] == 2 and dual_mode != "off"
+
+    you = None
+    if dual:
+        print(f"{_DIM}Stereo file: left channel = microphone ('{me_label}'), right channel = "
+              f"system audio (remote speakers). Use --dual-channel off to ignore this.{_R}",
+              file=sys.stderr)
+        mic, remote = channels[0], channels[1]
+        you = detect_you(words, mic, remote)
+    else:
+        remote = channels.mean(axis=0)
+
+    if dual and float(abs(mic).max()) < 0.001:
+        print(f"{_DIM}Note: the microphone channel (left) is silent in this recording (nobody "
+              f"spoke on it, or it was muted), so nothing is labelled '{me_label}'. Everything "
+              f"on the system-audio channel is numbered as Speaker N.{_R}", file=sys.stderr)
+
+    if dual and float(abs(remote).max()) < 0.001:
+        print(f"{_OR}The system-audio channel is silent: no remote speakers to identify.{_R}",
+              file=sys.stderr)
+        turns = []
+    else:
+        turns = diarize(remote, pipeline, num_speakers, min_speakers, max_speakers)
+    paragraphs = build_paragraphs(words, turns, you)
+    text = render(paragraphs, label_speakers(paragraphs, names, me_label))
 
     output_path.write_text(text + "\n", encoding="utf-8")
     print(f"{_GR}Saved : {_WH}{output_path}{_R}", file=sys.stderr)

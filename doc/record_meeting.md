@@ -28,6 +28,7 @@ Stop recording with **Enter** or **Ctrl+C**. While recording, the elapsed time a
 | `--no-mic` | Record system audio only |
 | `--no-system` | Record microphone only |
 | `--duck` | Hybrid-meeting mode: lower the microphone while system audio plays (see below) |
+| `--separate-channels` | Stereo MP3 with the microphone on the left and system audio on the right, instead of one mixed channel (see below) |
 | `--list-devices` | Print device ids and exit |
 | `--transcribe ask\|yes\|no` | Run `transcribe_file.py` afterwards (default: `ask`) |
 | `-l, --language` | Passed to `transcribe_file.py` |
@@ -49,6 +50,14 @@ python scripts/record_meeting_gui.py --autostart --tray    # start recording, hi
 ```
 
 Double-click **`scripts\create_shortcut.bat`** to create a *Meeting Recorder* shortcut on the Desktop and in the Start Menu. It runs the GUI without a console window with `--autostart`, i.e. one click starts recording with the default microphone and speakers. Run it with `-Tray` to make the shortcut start hidden in the tray, or `-Remove` to delete the shortcuts. Only one instance can run at a time.
+
+## Separate channels (`--separate-channels` / GUI checkbox)
+
+Normally both sources are mixed into one mono track, so it is no longer known who was on the microphone and who was on the system audio (the remote participants in Teams and similar apps). With `--separate-channels`, or the GUI checkbox **"Keep mic and system audio on separate channels"** (on by default), the MP3 is stereo: microphone on the left, system audio on the right. `transcribe_file.py` reads it exactly as before, and `transcribe_speakers.py` uses it to label your own voice as **You** (see [transcribe_speakers.md](transcribe_speakers.md)).
+
+- The file is larger: 96 kbps instead of 64 kbps.
+- It only applies when both a microphone and system audio are recorded.
+- Use headphones. With speakers, the remote voices are picked up again by the microphone, which makes them look like you.
 
 ## Hybrid meetings (`--duck` / GUI checkbox)
 

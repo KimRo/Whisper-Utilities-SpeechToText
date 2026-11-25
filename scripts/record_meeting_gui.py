@@ -121,33 +121,39 @@ class App:
             frm, text="Hybrid meeting: lower mic while remote audio plays", variable=self.duck)
         self.duck_cb.grid(row=6, column=0, columnspan=3, sticky="w", pady=(8, 0))
 
+        self.stereo = tk.BooleanVar(value=True)
+        self.stereo_cb = ttk.Checkbutton(
+            frm, text="Keep mic and system audio on separate channels (to label 'You')",
+            variable=self.stereo)
+        self.stereo_cb.grid(row=7, column=0, columnspan=3, sticky="w")
+
         self.status = tk.StringVar(value="Ready")
         ttk.Label(frm, textvariable=self.status, wraplength=340, foreground="#555").grid(
-            row=7, column=0, columnspan=3, sticky="w", pady=(8, 8))
+            row=8, column=0, columnspan=3, sticky="w", pady=(8, 8))
 
         self.transcribe = tk.BooleanVar(value=True)
         ttk.Checkbutton(frm, text="Transcribe after stopping", variable=self.transcribe).grid(
-            row=8, column=0, columnspan=3, sticky="w")
+            row=9, column=0, columnspan=3, sticky="w")
         # Which transcription to run after stopping: plain text, or text labelled per speaker
         self.mode = tk.StringVar(value="normal")
         mode_frm = ttk.Frame(frm)
-        mode_frm.grid(row=9, column=0, columnspan=3, sticky="w", padx=(18, 0))
+        mode_frm.grid(row=10, column=0, columnspan=3, sticky="w", padx=(18, 0))
         ttk.Radiobutton(mode_frm, text="Normal", value="normal", variable=self.mode).pack(side="left")
         ttk.Radiobutton(mode_frm, text="With speakers", value="speakers",
                         variable=self.mode).pack(side="left", padx=(12, 0))
         self.lang = tk.StringVar(value="nl")
         self.model = tk.StringVar(value=DEFAULT_MODEL)
-        ttk.Label(frm, text="Language").grid(row=10, column=0, sticky="w", pady=(4, 0))
+        ttk.Label(frm, text="Language").grid(row=11, column=0, sticky="w", pady=(4, 0))
         ttk.Combobox(frm, textvariable=self.lang, values=LANGUAGES, width=8).grid(
-            row=10, column=1, sticky="w", padx=(8, 0), pady=(4, 0))
-        ttk.Label(frm, text="Model").grid(row=11, column=0, sticky="w")
+            row=11, column=1, sticky="w", padx=(8, 0), pady=(4, 0))
+        ttk.Label(frm, text="Model").grid(row=12, column=0, sticky="w")
         ttk.Combobox(frm, textvariable=self.model, values=MODELS, width=8,
-                     state="readonly").grid(row=11, column=1, sticky="w", padx=(8, 0))
+                     state="readonly").grid(row=12, column=1, sticky="w", padx=(8, 0))
 
         btns = ttk.Frame(frm)
-        btns.grid(row=12, column=0, columnspan=3, pady=(12, 0), sticky="ew")
+        btns.grid(row=13, column=0, columnspan=3, pady=(12, 0), sticky="ew")
         self.pick_btn = ttk.Button(frm, text="Transcribe a recording…", command=self.pick_recording)
-        self.pick_btn.grid(row=13, column=0, columnspan=3, pady=(6, 0), sticky="ew")
+        self.pick_btn.grid(row=14, column=0, columnspan=3, pady=(6, 0), sticky="ew")
         self.btn = ttk.Button(btns, text="● Start recording", command=self.toggle)
         self.btn.pack(side="left", expand=True, fill="x")
         self.tray_btn = ttk.Button(btns, text="Minimize to tray", command=self.to_tray)
@@ -245,6 +251,7 @@ class App:
         self.sys_box.config(state=state)
         self.refresh_btn.state(["!disabled"] if enabled else ["disabled"])
         self.duck_cb.state(["!disabled"] if enabled else ["disabled"])
+        self.stereo_cb.state(["!disabled"] if enabled else ["disabled"])
 
     # ── Recording ───────────────────────────────────────────────────────────────
     def toggle(self):
@@ -271,6 +278,7 @@ class App:
             return
         self.mp3_path = rm.build_name(None)
         self.duck_enabled = self.duck.get()   # read here: Tk variables belong to the UI thread
+        self.stereo_enabled = self.stereo.get()
         self.stop_evt.clear()
         self.result = None
         self.recording = True
@@ -292,7 +300,7 @@ class App:
                     self.peaks[s.label] = s.peak
 
             rm.record(sources, self.mp3_path, self.stop_evt, on_tick=on_tick,
-                      duck=self.duck_enabled)
+                      duck=self.duck_enabled, stereo=self.stereo_enabled)
             silent = [s.label for s in sources if s.max_peak < 0.001]
         except Exception as e:  # noqa: BLE001 - report anything to the UI
             err = str(e)
