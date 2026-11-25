@@ -13,16 +13,21 @@ Usage (interactive — omit the audio file to be prompted for all options):
 
 Options:
     -l, --language   Language code: en or nl (default: nl)
-    -o, --output     Output file path (default: <input stem>.txt next to input file)
+    -o, --output     Output base name (default: input stem). Always saved to the
+                     transcripts folder as <YYYY-MM-DD_HH-MM-SS>_<name>.txt
     --model          Whisper model size: tiny/base/small/medium/large-v2 (default: small)
     --cpu            Force CPU even if CUDA is available
 """
 
 import argparse
 import sys
+from datetime import datetime
 from pathlib import Path
 
 from faster_whisper import WhisperModel
+
+# Repo-root "transcripts" folder (same location for all scripts)
+TRANSCRIPT_DIR = Path(__file__).resolve().parent.parent / "transcripts"
 
 # ── Colours ─────────────────────────────────────────────────────────────────────
 if sys.platform == "win32":
@@ -126,12 +131,17 @@ def prompt_model() -> str:
 
 
 def prompt_output(audio_path: Path) -> Path:
-    default = audio_path.with_suffix(".txt")
-    raw = input(f"{_CY}Output file{_R} (Enter = {_DIM}{default.name}{_R}): ").strip().strip('"')
-    if not raw:
-        return default
-    p = Path(raw)
-    return p.resolve() if p.is_absolute() else (audio_path.parent / p).resolve()
+    default = build_output_path(audio_path, None)
+    raw = input(f"{_CY}Output name{_R} (Enter = {_DIM}{default.name}{_R}): ").strip().strip('"')
+    return build_output_path(audio_path, Path(raw) if raw else None)
+
+
+def build_output_path(audio_path: Path, requested: Path | None) -> Path:
+    """Always write into the transcripts folder as '<timestamp>_<original name>.txt'."""
+    TRANSCRIPT_DIR.mkdir(parents=True, exist_ok=True)
+    stem = requested.stem if requested else audio_path.stem
+    ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    return TRANSCRIPT_DIR / f"{ts}_{stem}.txt"
 
 
 # ── Core ────────────────────────────────────────────────────────────────────────
@@ -165,7 +175,8 @@ def main() -> None:
     parser.add_argument("-l", "--language", default=None,
                         help="Language code, e.g. en or nl (default: nl)")
     parser.add_argument("-o", "--output", type=Path, default=None,
-                        help="Output .txt file (default: <audio stem>.txt beside input)")
+                        help="Output base name (default: audio stem). The file is always saved in "
+                             "the transcripts folder as <timestamp>_<name>.txt")
     parser.add_argument("--model", default=None,
                         help="Whisper model size (default: small)")
     parser.add_argument("--cpu", action="store_true",
@@ -198,7 +209,7 @@ def main() -> None:
             sys.exit(1)
 
         model_name  = args.model or "small"
-        output_path = args.output.resolve() if args.output else audio_path.with_suffix(".txt")
+        output_path = build_output_path(audio_path, args.output)
         force_cpu   = args.cpu
 
     model = load_model(model_name, force_cpu)

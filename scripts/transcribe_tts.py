@@ -48,7 +48,7 @@ _WH  = "\033[97m"  # bright white  — transcript text
 
 # ── Constants ──────────────────────────────────────────────────────────────────
 SAMPLE_RATE = 16000
-TRANSCRIPT_DIR = Path(__file__).parent / "transcripts"
+TRANSCRIPT_DIR = Path(__file__).resolve().parent.parent / "transcripts"  # repo-root transcripts folder
 LANG_NAMES = {
     "en": "English", "nl": "Dutch",
     "ar": "Arabic",  "zh": "Chinese",  "cs": "Czech",     "da": "Danish",
@@ -406,8 +406,8 @@ def load_model(size: str, force_cpu: bool) -> WhisperModel:
 def create_session() -> None:
     global session_file
     TRANSCRIPT_DIR.mkdir(parents=True, exist_ok=True)
-    ts = datetime.now().strftime("%Y-%m-%d_%H-%M")
-    session_file = TRANSCRIPT_DIR / f"session_{ts}.txt"
+    ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    session_file = TRANSCRIPT_DIR / f"{ts}_session.txt"
     session_file.touch()
 
 # ── Entry ───────────────────────────────────────────────────────────────────────

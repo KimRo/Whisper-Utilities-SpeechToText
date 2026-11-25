@@ -65,8 +65,10 @@ If no speech is detected after releasing Space the screen shows `[No speech dete
 Each session writes to a timestamped `.txt` file:
 
 ```
-transcripts\session_YYYY-MM-DD_HH-MM.txt
+transcripts\YYYY-MM-DD_HH-MM-SS_session.txt
 ```
+
+The `transcripts` folder is in the repository root (shared with `transcribe_file.py`) and is created if it doesn't exist.
 
 The file is created at startup and each kept fragment is appended immediately, so the file is safe even if the script is interrupted.
 

@@ -65,7 +65,7 @@ python scripts/transcribe_file.py recording.mp3
 
 `samples\transcribe_file_sample.bat` — double-click to download and transcribe a real audio file with no setup beyond installation.
 
-It downloads the recording of Martin Luther King Jr.'s *"I Have a Dream"* speech (August 28, 1963) from the Internet Archive (~3 MB), then transcribes it to `samples\MLKDream.txt` using the `small` model in English. A confirmation prompt is shown before anything is downloaded.
+It downloads the recording of Martin Luther King Jr.'s *"I Have a Dream"* speech (August 28, 1963) from the Internet Archive (~3 MB), then transcribes it to `transcripts\<timestamp>_MLKDream.txt` using the `small` model in English. A confirmation prompt is shown before anything is downloaded.
 
 ## Documentation
 

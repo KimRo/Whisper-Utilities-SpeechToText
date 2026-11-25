@@ -12,7 +12,7 @@ echo  Washington D.C.
 echo.
 echo  Source : Internet Archive (archive.org)
 echo  File   : MLKDream_64kb.mp3  (~3 MB)
-echo  Output : MLKDream.txt (saved next to this batch file)
+echo  Output : transcripts\^<timestamp^>_MLKDream.txt
 echo.
 echo ============================================================
 echo.
