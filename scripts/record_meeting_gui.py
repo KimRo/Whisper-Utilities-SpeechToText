@@ -18,11 +18,17 @@ labels who says what (needs the one-time Hugging Face token, see doc/transcribe_
 "Transcribe a recording..." does the same for any existing audio file you pick (the dialog
 opens in the recordings folder), using the mode, language and model selected in the window.
 
+At start-up the window checks which packages are installed. Options that cannot work are
+greyed out and the Status box lists what is missing (scripts\\install.bat installs it).
+
 Only record meetings when all participants know about and agree with it.
 """
 
+from __future__ import annotations
+
 import argparse
 import ctypes
+import importlib.util
 import os
 import queue
 import re
@@ -34,16 +40,13 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, ttk
 
-from PIL import Image, ImageDraw
+try:
+    from PIL import Image, ImageDraw
+except ImportError:
+    Image = ImageDraw = None  # only the tray icon needs Pillow; reported at start-up
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-try:
-    import record_meeting as rm
-except SystemExit:  # record_meeting exits at import if PyAudioWPatch is missing
-    ctypes.windll.user32.MessageBoxW(
-        0, "PyAudioWPatch is not installed.\n\nRun: python -m pip install PyAudioWPatch",
-        "Meeting Recorder", 0x10)
-    sys.exit(1)
+import record_meeting as rm  # importable even when its recording packages are missing
 
 try:
     import pystray
@@ -57,6 +60,69 @@ OFF = "Off (don't record this source)"
 ANSI = re.compile(r"\x1b\[[0-9;]*m")                     # colour codes in the scripts' output
 STAGES = ("Loading", "Transcribing", "Identifying", "Language")   # progress lines worth showing
 TX_COLORS = {"busy": "#555555", "ok": "#1a7f37", "fail": "#c62828"}
+
+# What each feature needs: (name shown to the user, importable module)
+REQUIREMENTS = {
+    "record": [("PyAudioWPatch", "pyaudiowpatch"), ("PyAV", "av"), ("NumPy", "numpy")],
+    "transcribe": [("faster-whisper", "faster_whisper")],
+    "speakers": [("pyannote.audio", "pyannote.audio"), ("PyTorch", "torch")],
+    "tray": [("Pillow", "PIL"), ("pystray", "pystray")],
+}
+FEATURE_TITLES = {
+    "record": "Recording unavailable",
+    "transcribe": "Transcription unavailable",
+    "speakers": "'With speakers' unavailable",
+    "tray": "Tray icon unavailable",
+}
+HF_TOKEN_MISSING = "Hugging Face token (set HF_TOKEN)"
+
+
+def module_available(name: str) -> bool:
+    """True when the module is installed (looked up without importing it, so it is fast)."""
+    try:
+        return importlib.util.find_spec(name) is not None
+    except (ImportError, ValueError, AttributeError):
+        return False
+
+
+def has_hf_token() -> bool:
+    """A Hugging Face token in the environment or saved by `huggingface-cli login`."""
+    if os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN"):
+        return True
+    try:
+        from huggingface_hub import get_token
+        return bool(get_token())
+    except Exception:  # noqa: BLE001 - huggingface_hub missing or unreadable: no token
+        return False
+
+
+def check_requirements() -> tuple[dict, dict]:
+    """Return (missing, available): missing[feature] lists names, available[feature] is a bool."""
+    missing = {feature: [name for name, mod in items if not module_available(mod)]
+               for feature, items in REQUIREMENTS.items()}
+    if pystray is None and not missing["tray"]:
+        missing["tray"].append("pystray (failed to load)")
+    if not has_hf_token():
+        missing["speakers"].append(HF_TOKEN_MISSING)
+    available = {
+        "record": not missing["record"],
+        "transcribe": not missing["transcribe"],
+        "speakers": not missing["transcribe"] and not missing["speakers"],
+        "tray": not missing["tray"],
+    }
+    return missing, available
+
+
+def missing_report(missing: dict) -> str:
+    """Text for the Status box: what is missing for which feature, and how to fix it."""
+    lines = [f"{FEATURE_TITLES[f]}: missing {', '.join(missing[f])}"
+             for f in FEATURE_TITLES if missing[f]]
+    packages = any(n != HF_TOKEN_MISSING for names in missing.values() for n in names)
+    if packages:
+        lines.append("Run scripts\\install.bat to install the missing packages.")
+    if HF_TOKEN_MISSING in missing["speakers"]:
+        lines.append("Set HF_TOKEN for 'With speakers' (see doc/transcribe_speakers.md).")
+    return "\n".join(lines)
 AUDIO_TYPES = [
     ("Audio and video files", "*.mp3 *.wav *.m4a *.flac *.ogg *.opus *.aac *.wma *.mp4 *.webm *.mkv"),
     ("All files", "*.*"),
@@ -144,23 +210,28 @@ class App:
         self.status = tk.StringVar(value="Ready")
 
         self.transcribe = tk.BooleanVar(value=True)
-        ttk.Checkbutton(frm, text="Transcribe after stopping", variable=self.transcribe).grid(
-            row=9, column=0, columnspan=3, sticky="w", pady=(10, 0))
+        self.transcribe_cb = ttk.Checkbutton(frm, text="Transcribe after stopping",
+                                             variable=self.transcribe)
+        self.transcribe_cb.grid(row=9, column=0, columnspan=3, sticky="w", pady=(10, 0))
         # Which transcription to run after stopping: plain text, or text labelled per speaker
         self.mode = tk.StringVar(value="normal")
         mode_frm = ttk.Frame(frm)
         mode_frm.grid(row=10, column=0, columnspan=3, sticky="w", padx=(18, 0))
-        ttk.Radiobutton(mode_frm, text="Normal", value="normal", variable=self.mode).pack(side="left")
-        ttk.Radiobutton(mode_frm, text="With speakers", value="speakers",
-                        variable=self.mode).pack(side="left", padx=(12, 0))
+        self.radio_normal = ttk.Radiobutton(mode_frm, text="Normal", value="normal",
+                                            variable=self.mode)
+        self.radio_normal.pack(side="left")
+        self.radio_speakers = ttk.Radiobutton(mode_frm, text="With speakers", value="speakers",
+                                              variable=self.mode)
+        self.radio_speakers.pack(side="left", padx=(12, 0))
         self.lang = tk.StringVar(value="nl")
         self.model = tk.StringVar(value=DEFAULT_MODEL)
         ttk.Label(frm, text="Language").grid(row=11, column=0, sticky="w", pady=(4, 0))
-        ttk.Combobox(frm, textvariable=self.lang, values=LANGUAGES, width=8).grid(
-            row=11, column=1, sticky="w", padx=(8, 0), pady=(4, 0))
+        self.lang_box = ttk.Combobox(frm, textvariable=self.lang, values=LANGUAGES, width=8)
+        self.lang_box.grid(row=11, column=1, sticky="w", padx=(8, 0), pady=(4, 0))
         ttk.Label(frm, text="Model").grid(row=12, column=0, sticky="w")
-        ttk.Combobox(frm, textvariable=self.model, values=MODELS, width=8,
-                     state="readonly").grid(row=12, column=1, sticky="w", padx=(8, 0))
+        self.model_box = ttk.Combobox(frm, textvariable=self.model, values=MODELS, width=8,
+                                      state="readonly")
+        self.model_box.grid(row=12, column=1, sticky="w", padx=(8, 0))
 
         btns = ttk.Frame(frm)
         btns.grid(row=13, column=0, columnspan=3, pady=(12, 0), sticky="ew")
@@ -183,14 +254,14 @@ class App:
         self.btn.pack(side="left", expand=True, fill="x")
         self.tray_btn = ttk.Button(btns, text="Minimize to tray", command=self.to_tray)
         self.tray_btn.pack(side="left", padx=(8, 0))
-        if pystray is None:
-            self.tray_btn.state(["disabled"])
-            self.status.set("Ready (tray unavailable: pip install pystray)")
 
         root.protocol("WM_DELETE_WINDOW", self.on_close)
         root.bind("<Unmap>", self.on_unmap)
         self.pa = None
-        self.refresh_devices()
+        self.missing, self.can = check_requirements()
+        self.apply_requirements()
+        if self.can["record"]:
+            self.refresh_devices()
         self.poll()
 
         if autostart:
@@ -277,6 +348,31 @@ class App:
         return {"mic": mic_idx, "loopback": sys_idx,
                 "no_mic": mic_kind == "off", "no_system": sys_kind == "off"}
 
+    def apply_requirements(self):
+        """Grey out what cannot work and list in the Status box what is missing."""
+        can = self.can
+        if not can["record"]:
+            self.btn.state(["disabled"])
+            self.refresh_btn.state(["disabled"])
+            for box in (self.mic_box, self.sys_box):
+                box.config(state="disabled")
+            for cb in (self.duck_cb, self.stereo_cb):
+                cb.state(["disabled"])
+        if not can["transcribe"]:
+            self.transcribe.set(False)
+            for w in (self.transcribe_cb, self.radio_normal, self.radio_speakers, self.pick_btn):
+                w.state(["disabled"])
+            for box in (self.lang_box, self.model_box):
+                box.config(state="disabled")
+        elif not can["speakers"]:
+            self.mode.set("normal")
+            self.radio_speakers.state(["disabled"])
+        if not can["tray"] or pystray is None:
+            self.tray_btn.state(["disabled"])
+        report = missing_report(self.missing)
+        if report:
+            self.status.set(report)
+
     def on_stereo_toggle(self):
         self.stereo_pref = self.stereo.get()
 
@@ -317,6 +413,10 @@ class App:
 
     def start(self):
         if self.recording or (self.thread and self.thread.is_alive()):
+            return
+        if not self.can["record"]:
+            self.status.set(missing_report(self.missing))
+            self.show()
             return
         choice = self.selected_devices()
         if choice["no_mic"] and choice["no_system"]:

@@ -38,6 +38,8 @@ Options:
 Note: only record meetings when all participants know about and agree with it.
 """
 
+from __future__ import annotations
+
 import argparse
 import queue
 import subprocess
@@ -47,8 +49,14 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-import av
-import numpy as np
+try:
+    import av
+except ImportError:      # the GUI checks for this at start-up and disables recording
+    av = None
+try:
+    import numpy as np
+except ImportError:
+    np = None
 
 # Repo-root "recordings" folder (same level as "transcripts")
 RECORDINGS_DIR = Path(__file__).resolve().parent.parent / "recordings"
@@ -96,8 +104,17 @@ def fail(msg: str) -> None:
 # ── PyAudioWPatch (WASAPI loopback) ─────────────────────────────────────────────
 try:
     import pyaudiowpatch as pyaudio
-except ImportError:
-    fail("PyAudioWPatch is not installed. Run: python -m pip install PyAudioWPatch")
+except ImportError:      # the GUI checks for this at start-up and disables recording
+    pyaudio = None
+
+
+def require_recording_packages() -> None:
+    """Command line: stop with a clear message when a recording package is missing."""
+    missing = [name for name, mod in (("PyAudioWPatch", pyaudio), ("PyAV (av)", av),
+                                      ("NumPy", np)) if mod is None]
+    if missing:
+        fail(f"Cannot record: {', '.join(missing)} not installed. "
+             f"Run scripts\\install.bat, or: python -m pip install PyAudioWPatch \"av<19\" numpy")
 
 
 # ── Devices ─────────────────────────────────────────────────────────────────────
@@ -360,6 +377,7 @@ def ask_yes(prompt: str) -> bool:
 
 
 def main() -> None:
+    require_recording_packages()
     ap = argparse.ArgumentParser(description="Record microphone + system audio to MP3")
     ap.add_argument("-o", "--output")
     ap.add_argument("--mic", type=int)

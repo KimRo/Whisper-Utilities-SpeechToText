@@ -43,6 +43,17 @@ Recordings are saved to the repo-root `recordings\` folder as `<YYYY-MM-DD_HH-MM
 
 `scripts/record_meeting_gui.py` is a small window with a timer, level meters for both sources, a Start/Stop button, a "Transcribe after stopping" checkbox and language/model pickers (defaults `nl` / `medium`). Two dropdowns list the detected **microphones** and **system-audio (loopback) devices**: each defaults to the Windows default device and can be set to *Off*; **Refresh devices** rescans (for example after plugging in a headset). The dropdowns are locked while recording. **Minimize to tray**, or the window's own minimize button, hides it in the system tray instead of the taskbar (grey icon = idle, red = recording; right-click for Show / Start / Stop / Quit). Closing the window while recording also moves it to the tray; closing it while idle quits. Transcription (after stopping, or via **Transcribe a recording…**) runs hidden in the background: the **Status** box at the bottom shows the current step and elapsed time, then a green *Transcription finished* line with the saved file name, or a red *Transcription failed* line with the error. When it ends, the window comes to the front again, also from the tray. Several transcriptions can run at once. Because there is no console, the speaker transcription cannot ask for a Hugging Face token: set `HF_TOKEN` first (see [transcribe_speakers.md](transcribe_speakers.md)), otherwise it fails with a message saying so. If you quit the window while a transcription is running, it keeps running hidden and still saves the transcript.
 
+**Start-up check.** When the window opens it checks which packages are installed and greys out what cannot work, listing what is missing in the Status box (the check only looks whether the packages exist; it does not load them):
+
+| Missing | Greyed out |
+|---|---|
+| PyAudioWPatch, PyAV (`av`) or NumPy | Everything for recording: Start, the device pickers, Refresh, the hybrid-meeting and separate-channel checkboxes |
+| faster-whisper | All transcription: "Transcribe after stopping", Normal / With speakers, language and model, "Transcribe a recording…" |
+| pyannote.audio, PyTorch, or a Hugging Face token (`HF_TOKEN` or `huggingface-cli login`) | Only "With speakers" |
+| Pillow or pystray | The tray button and tray icon |
+
+Run `scripts\install.bat` to install missing packages. The command-line recorder (`record_meeting.py`) stops with a clear message if a recording package is missing.
+
 ```powershell
 python scripts/record_meeting_gui.py                       # open the window
 python scripts/record_meeting_gui.py --autostart           # open and start recording
