@@ -40,7 +40,8 @@ Options:
     --names A,B,C    Names for the speakers, in order of first appearance
 
 Note: overlapping speech is assigned to a single speaker per word, so crosstalk
-is not separated perfectly.
+is not separated perfectly. Speaker changes are snapped to sentence boundaries
+(see PAUSE_SPLIT and MIN_RUN) so sentences are not cut in half.
 """
 
 import argparse
@@ -55,6 +56,13 @@ TRANSCRIPT_DIR = Path(__file__).resolve().parent.parent / "transcripts"
 
 DIARIZATION_MODEL = "pyannote/speaker-diarization-community-1"
 SAMPLE_RATE = 16000
+
+# Speaker changes are snapped to sentence boundaries. A sentence ends at terminal
+# punctuation or after a pause of PAUSE_SPLIT seconds. Within a sentence, a run by another
+# speaker shorter than MIN_RUN seconds is absorbed; a longer one is a real change.
+PAUSE_SPLIT = 0.8
+MIN_RUN = 2.0
+SENTENCE_END = (".", "?", "!", "…")
 
 # ── Colours ─────────────────────────────────────────────────────────────────────
 if sys.platform == "win32":
@@ -357,20 +365,70 @@ def speaker_for_word(start: float, end: float, turns, fallback: str | None) -> s
     return nearest[2]
 
 
+def split_sentences(words) -> list[list[int]]:
+    """Indices of words grouped into sentences (terminal punctuation or a long pause)."""
+    sentences: list[list[int]] = []
+    current: list[int] = []
+    for i, (start, end, word) in enumerate(words):
+        current.append(i)
+        text = word.strip()
+        next_gap = words[i + 1][0] - end if i + 1 < len(words) else None
+        if text.endswith(SENTENCE_END) or next_gap is None or next_gap >= PAUSE_SPLIT:
+            sentences.append(current)
+            current = []
+    if current:
+        sentences.append(current)
+    return sentences
+
+
+def snap_to_sentences(words, speakers: list[str]) -> list[str]:
+    """Move speaker changes to sentence boundaries.
+
+    Per sentence, the speaker who talks most gets any short (< MIN_RUN) run by another
+    speaker. Runs of MIN_RUN seconds or more are kept, so genuine interruptions and long
+    unpunctuated stretches still switch speaker.
+    """
+    result = list(speakers)
+    for idx in split_sentences(words):
+        # contiguous runs of the same speaker: [speaker, first_pos, last_pos, seconds]
+        runs: list[list] = []
+        for i in idx:
+            dur = max(words[i][1] - words[i][0], 0.0)
+            if runs and runs[-1][0] == speakers[i]:
+                runs[-1][2] = i
+                runs[-1][3] += dur
+            else:
+                runs.append([speakers[i], i, i, dur])
+        if len(runs) < 2:
+            continue
+        total: dict[str, float] = {}
+        for spk, _, _, dur in runs:
+            total[spk] = total.get(spk, 0.0) + dur
+        majority = max(total, key=total.get)
+        for spk, first, last, dur in runs:
+            if dur < MIN_RUN:
+                for i in range(first, last + 1):
+                    result[i] = majority
+    return result
+
+
 def build_paragraphs(words, turns) -> list[tuple[float, str, str]]:
     """Group consecutive words of the same speaker -> [(start, raw_label, text), ...]."""
-    paragraphs: list[tuple[float, str, list[str]]] = []
+    speakers: list[str] = []
     current = None
-    for start, end, word in words:
-        spk = speaker_for_word(start, end, turns, current)
-        if spk is None:
-            spk = "SPEAKER_00"
+    for start, end, _ in words:
+        spk = speaker_for_word(start, end, turns, current) or "SPEAKER_00"
+        speakers.append(spk)
+        current = spk
+    speakers = snap_to_sentences(words, speakers)
+
+    paragraphs: list[tuple[float, str, list[str]]] = []
+    for (start, _, word), spk in zip(words, speakers):
         if paragraphs and paragraphs[-1][1] == spk:
             paragraphs[-1][2].append(word)
         else:
             paragraphs.append((start, spk, [word]))
-        current = spk
-    return [(s, spk, "".join(ws).strip()) for s, spk, ws in paragraphs]
+    return [(st, spk, "".join(ws).strip()) for st, spk, ws in paragraphs]
 
 
 def label_speakers(paragraphs, names: list[str] | None) -> dict[str, str]:

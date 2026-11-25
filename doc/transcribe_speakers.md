@@ -43,9 +43,10 @@ python scripts/transcribe_speakers.py            # interactive
 
 ## Limitations
 
-- Overlapping speech is not separated: each word goes to the speaker with the most overlap.
+- Overlapping speech is not separated: each word goes to the speaker with the most overlap, and sentences are then assigned as a whole (see below).
 - The number of speakers can be mis-detected, especially with similar voices or poor audio. Pass `--speakers` when you know it.
 - Without a GPU the speaker step is slow on long recordings.
 - Uses pyannote.audio 4.1.1 and its `community-1` model, which needs PyTorch 2.8 or newer. The installer pins torch and torchaudio (2.11.0) together and holds them with a constraints file so pyannote's dependencies cannot replace the CUDA build.
 - PyAV is kept below version 19, because faster-whisper 1.2.1 passes an argument that PyAV 19 removed.
 - The words are matched against pyannote's "exclusive" diarization, which has no overlapping turns.
+- Speaker changes are moved to sentence boundaries: a sentence ends at `.`, `?`, `!` or a pause of 0.8 s, and a short stretch (under 2 s) by another speaker inside a sentence goes to whoever speaks most of it. Longer stretches are kept, so real interruptions still show, but a speaker change inside a long unpunctuated stretch can still fall mid-sentence. The thresholds are `PAUSE_SPLIT` and `MIN_RUN` at the top of the script.
