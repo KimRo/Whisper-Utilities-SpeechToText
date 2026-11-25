@@ -49,6 +49,7 @@ $packages = @(
     'faster-whisper',
     'ctranslate2',
     'torchaudio',
+    'torchcodec',
     'torch',
     'sounddevice',
     'soundfile',

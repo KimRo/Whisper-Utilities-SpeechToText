@@ -10,8 +10,9 @@ Usage:
 Records microphone + system audio with the default devices to recordings/<timestamp>_meeting.mp3.
 The window can be minimized to the system tray (button, or closing the window while recording).
 Tray icon: red = recording, grey = idle. Right-click for Show / Start / Stop / Quit.
-After stopping, the recording can be transcribed automatically with transcribe_file.py
-(opens in its own console window).
+After stopping, the recording can be transcribed automatically (opens in its own console
+window): "Normal" runs transcribe_file.py, "With speakers" runs transcribe_speakers.py, which
+labels who says what (needs the one-time Hugging Face token, see doc/transcribe_speakers.md).
 
 Only record meetings when all participants know about and agree with it.
 """
@@ -121,17 +122,24 @@ class App:
         self.transcribe = tk.BooleanVar(value=True)
         ttk.Checkbutton(frm, text="Transcribe after stopping", variable=self.transcribe).grid(
             row=8, column=0, columnspan=3, sticky="w")
+        # Which transcription to run after stopping: plain text, or text labelled per speaker
+        self.mode = tk.StringVar(value="normal")
+        mode_frm = ttk.Frame(frm)
+        mode_frm.grid(row=9, column=0, columnspan=3, sticky="w", padx=(18, 0))
+        ttk.Radiobutton(mode_frm, text="Normal", value="normal", variable=self.mode).pack(side="left")
+        ttk.Radiobutton(mode_frm, text="With speakers", value="speakers",
+                        variable=self.mode).pack(side="left", padx=(12, 0))
         self.lang = tk.StringVar(value="nl")
         self.model = tk.StringVar(value=DEFAULT_MODEL)
-        ttk.Label(frm, text="Language").grid(row=9, column=0, sticky="w", pady=(4, 0))
+        ttk.Label(frm, text="Language").grid(row=10, column=0, sticky="w", pady=(4, 0))
         ttk.Combobox(frm, textvariable=self.lang, values=LANGUAGES, width=8).grid(
-            row=9, column=1, sticky="w", padx=(8, 0), pady=(4, 0))
-        ttk.Label(frm, text="Model").grid(row=10, column=0, sticky="w")
+            row=10, column=1, sticky="w", padx=(8, 0), pady=(4, 0))
+        ttk.Label(frm, text="Model").grid(row=11, column=0, sticky="w")
         ttk.Combobox(frm, textvariable=self.model, values=MODELS, width=8,
-                     state="readonly").grid(row=10, column=1, sticky="w", padx=(8, 0))
+                     state="readonly").grid(row=11, column=1, sticky="w", padx=(8, 0))
 
         btns = ttk.Frame(frm)
-        btns.grid(row=11, column=0, columnspan=3, pady=(12, 0), sticky="ew")
+        btns.grid(row=12, column=0, columnspan=3, pady=(12, 0), sticky="ew")
         self.btn = ttk.Button(btns, text="● Start recording", command=self.toggle)
         self.btn.pack(side="left", expand=True, fill="x")
         self.tray_btn = ttk.Button(btns, text="Minimize to tray", command=self.to_tray)
@@ -315,13 +323,15 @@ class App:
             self.quit()
 
     def launch_transcription(self, path):
+        with_speakers = self.mode.get() == "speakers"
         cmd = rm.transcribe_command(path, "meeting", self.lang.get() or None,
-                                    self.model.get() or None)
-        # transcribe_file.py needs a real console: use python.exe, not pythonw.exe
+                                    self.model.get() or None, speakers=with_speakers)
+        # The transcribe scripts need a real console: use python.exe, not pythonw.exe
         cmd[0] = str(Path(sys.executable).with_name("python.exe"))
         inner = subprocess.list2cmdline(cmd)
         subprocess.Popen(f'cmd /c "{inner} & pause"', creationflags=subprocess.CREATE_NEW_CONSOLE)
-        self.status.set(self.status.get() + " — transcribing in a new window")
+        kind = "transcribing with speakers" if with_speakers else "transcribing"
+        self.status.set(self.status.get() + f" — {kind} in a new window")
 
     # ── Event loop ──────────────────────────────────────────────────────────────
     def poll(self):

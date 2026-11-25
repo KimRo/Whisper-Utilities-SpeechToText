@@ -258,8 +258,11 @@ def open_sources(pa, mic: int | None = None, loopback: int | None = None,
 
 
 def transcribe_command(mp3_path: Path, name: str | None, language: str | None = None,
-                       model: str | None = None, cpu: bool = False) -> list[str]:
-    cmd = [sys.executable, str(SCRIPT_DIR / "transcribe_file.py"), str(mp3_path),
+                       model: str | None = None, cpu: bool = False,
+                       speakers: bool = False) -> list[str]:
+    """Command that transcribes the recording; speakers=True labels who says what."""
+    script = "transcribe_speakers.py" if speakers else "transcribe_file.py"
+    cmd = [sys.executable, str(SCRIPT_DIR / script), str(mp3_path),
            "-o", Path(name).stem if name else "meeting"]
     if language:
         cmd += ["-l", language]

@@ -14,9 +14,7 @@ Speakers are anonymous and numbered in order of first appearance. It does not re
 The pyannote models are gated on Hugging Face (free):
 
 1. Create an account at <https://huggingface.co>.
-2. Accept the terms on both pages:
-   - <https://huggingface.co/pyannote/speaker-diarization-3.1>
-   - <https://huggingface.co/pyannote/segmentation-3.0>
+2. Accept the terms on the model page: <https://huggingface.co/pyannote/speaker-diarization-community-1>
 3. Create a **read** token (Settings → Access Tokens) and make it available:
    - `setx HF_TOKEN hf_xxxxxxxx` (open a new terminal afterwards), or
    - `huggingface-cli login`, or
@@ -48,5 +46,6 @@ python scripts/transcribe_speakers.py            # interactive
 - Overlapping speech is not separated: each word goes to the speaker with the most overlap.
 - The number of speakers can be mis-detected, especially with similar voices or poor audio. Pass `--speakers` when you know it.
 - Without a GPU the speaker step is slow on long recordings.
-- Pinned to pyannote.audio 3.4.0 with `huggingface_hub<1.0` (3.4.0 passes `use_auth_token`, which huggingface_hub 1.x removed). The installer pins torch/torchaudio so pyannote's dependencies cannot replace the CUDA build.
-- PyTorch 2.6+ only loads allow-listed classes from checkpoints. The script allow-lists the four pyannote/torch classes the 3.1 pipeline needs, so the safety check stays on.
+- Uses pyannote.audio 4.1.1 and its `community-1` model, which needs PyTorch 2.8 or newer. The installer pins torch and torchaudio (2.11.0) together and holds them with a constraints file so pyannote's dependencies cannot replace the CUDA build.
+- PyAV is kept below version 19, because faster-whisper 1.2.1 passes an argument that PyAV 19 removed.
+- The words are matched against pyannote's "exclusive" diarization, which has no overlapping turns.

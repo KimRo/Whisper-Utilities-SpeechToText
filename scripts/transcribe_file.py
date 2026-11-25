@@ -20,11 +20,32 @@ Options:
 """
 
 import argparse
+import os
 import sys
 from datetime import datetime
 from pathlib import Path
 
-from faster_whisper import WhisperModel
+def _prepare_cuda_dlls() -> None:
+    """Windows: expose the CUDA DLLs bundled with torch (cublas, cudnn) to ctranslate2.
+
+    Without this, GPU transcription can fail with 'cublas64_12.dll is not found' unless
+    torch happens to be imported first. Only the folder is added; torch is not loaded.
+    """
+    if sys.platform != "win32":
+        return
+    import importlib.util
+    spec = importlib.util.find_spec("torch")
+    if spec is None or not spec.submodule_search_locations:
+        return
+    lib = Path(list(spec.submodule_search_locations)[0]) / "lib"
+    if lib.is_dir():
+        os.environ["PATH"] = str(lib) + os.pathsep + os.environ.get("PATH", "")
+        os.add_dll_directory(str(lib))
+
+
+_prepare_cuda_dlls()
+
+from faster_whisper import WhisperModel  # noqa: E402 (after _prepare_cuda_dlls)
 
 # Repo-root "transcripts" folder (same location for all scripts)
 TRANSCRIPT_DIR = Path(__file__).resolve().parent.parent / "transcripts"

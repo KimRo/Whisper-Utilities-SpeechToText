@@ -142,19 +142,19 @@ $cudaOptions = @(
         note  = "Slow but most compatible"
     },
     [pscustomobject]@{
-        label = "CUDA 12.1 (recommended for RTX 5060)"
-        index = "https://download.pytorch.org/whl/cu121"
-        note  = "Best stability + widest support"
+        label = "CUDA 12.6 (recommended)"
+        index = "https://download.pytorch.org/whl/cu126"
+        note  = "Widest GPU support. Needs a recent NVIDIA driver."
     },
     [pscustomobject]@{
-        label = "CUDA 12.4 (newer drivers)"
-        index = "https://download.pytorch.org/whl/cu124"
-        note  = "Newer optimizations"
-    },
-    [pscustomobject]@{
-        label = "CUDA 12.8 (experimental)"
+        label = "CUDA 12.8"
         index = "https://download.pytorch.org/whl/cu128"
-        note  = "Bleeding edge, may break"
+        note  = "For RTX 50-series (Blackwell) GPUs and newer"
+    },
+    [pscustomobject]@{
+        label = "CUDA 13.0"
+        index = "https://download.pytorch.org/whl/cu130"
+        note  = "Newest drivers only; does not support older GPUs"
     }
 )
 
@@ -168,7 +168,7 @@ for ($i = 0; $i -lt $cudaOptions.Count; $i++) {
 }
 
 Write-Host ""
-Write-Host "Recommendation: use option 1 (CUDA 12.1) unless you know better." -ForegroundColor Yellow
+Write-Host "Recommendation: use option 1 (CUDA 12.6) unless you know better." -ForegroundColor Yellow
 Write-Host ""
 
 $selection = Read-Host "Select option [default: 1]"
@@ -178,7 +178,7 @@ if ([string]::IsNullOrWhiteSpace($selection)) {
 }
 
 if ($selection -notmatch '^\d+$' -or [int]$selection -ge $cudaOptions.Count) {
-    Write-Warn "Invalid selection → defaulting to CUDA 12.1"
+    Write-Warn "Invalid selection → defaulting to CUDA 12.6"
     $selection = 1
 }
 
@@ -198,23 +198,20 @@ Write-OK "NumPy installed"
 # --------------------------------------------------------------
 # 5. PyTorch
 # --------------------------------------------------------------
-Write-Step "Installing PyTorch (this may take a while)"
-& $python -m pip install torch --index-url $cudaIndex
+# torch and torchaudio are pinned to the same version: 2.11.0 is published on the
+# CPU, cu126, cu128 and cu130 indexes. pyannote.audio 4.x needs torch >= 2.8.
+$torchVersion = "2.11.0"
+
+Write-Step "Installing PyTorch $torchVersion (this may take a while)"
+& $python -m pip install "torch==$torchVersion" "torchaudio==$torchVersion" --index-url $cudaIndex
 if ($LASTEXITCODE -ne 0) { Write-Fail "PyTorch install failed" }
 Write-OK "PyTorch installed"
 
-# torchaudio must match the installed torch build (same index and version).
-Write-Step "Installing torchaudio (matching PyTorch)"
-$torchVer = (& $python -c "import torch; print(torch.__version__)").Trim()
-$torchBase = $torchVer.Split('+')[0]
-& $python -m pip install "torchaudio==$torchBase" --index-url $cudaIndex
-if ($LASTEXITCODE -ne 0) { Write-Fail "torchaudio install failed" }
-Write-OK "torchaudio installed"
-
-# Constraints file: stops later packages (pyannote.audio) from replacing the
-# CUDA build of torch with a newer CPU-only build.
+# Constraints file: stops later packages (pyannote.audio) from replacing this
+# torch build with a newer CPU-only build from PyPI.
 $constraints = Join-Path $env:TEMP "whisper_torch_constraints.txt"
-$tavVer = (& $python -c "import torchaudio; print(torchaudio.__version__)").Trim()
+$torchVer = (& $python -c "import torch; print(torch.__version__)").Trim()
+$tavVer   = (& $python -c "import torchaudio; print(torchaudio.__version__)").Trim()
 @("torch==$torchVer", "torchaudio==$tavVer") | Set-Content -Path $constraints -Encoding ascii
 
 # --------------------------------------------------------------
@@ -223,6 +220,7 @@ $tavVer = (& $python -c "import torchaudio; print(torchaudio.__version__)").Trim
 Write-Step "Installing Whisper dependencies"
 
 $packages = @(
+    "av<19",                  # PyAV 19 removed an argument faster-whisper 1.2.1 still passes
     "ctranslate2",
     "faster-whisper",
     "sounddevice",
@@ -230,8 +228,7 @@ $packages = @(
     "pynput",
     "PyAudioWPatch",
     "pystray",
-    "huggingface_hub<1.0",   # pyannote.audio 3.4.0 passes use_auth_token, removed in huggingface_hub 1.x
-    "pyannote.audio==3.4.0"
+    "pyannote.audio==4.1.1"   # speaker diarization (transcribe_speakers.py)
 )
 
 foreach ($p in $packages) {

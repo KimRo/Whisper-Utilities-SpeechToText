@@ -13,9 +13,8 @@ Use --names to replace the labels with real names.
 
 One-time setup (the pyannote models are gated on Hugging Face):
     1. Create a free account at https://huggingface.co
-    2. Accept the terms on both model pages:
-         https://huggingface.co/pyannote/speaker-diarization-3.1
-         https://huggingface.co/pyannote/segmentation-3.0
+    2. Accept the terms on the model page:
+         https://huggingface.co/pyannote/speaker-diarization-community-1
     3. Create a read token (Settings > Access Tokens) and set it:
          setx HF_TOKEN hf_xxxxxxxx        (then open a new terminal)
        or run `huggingface-cli login`, or just paste it when the script asks
@@ -54,7 +53,7 @@ from pathlib import Path
 # Repo-root "transcripts" folder (same location for all scripts)
 TRANSCRIPT_DIR = Path(__file__).resolve().parent.parent / "transcripts"
 
-DIARIZATION_MODEL = "pyannote/speaker-diarization-3.1"
+DIARIZATION_MODEL = "pyannote/speaker-diarization-community-1"
 SAMPLE_RATE = 16000
 
 # ── Colours ─────────────────────────────────────────────────────────────────────
@@ -266,43 +265,18 @@ def find_hf_token() -> str | None:
         return None
 
 
-def allow_pyannote_checkpoints() -> None:
-    """PyTorch >= 2.6 only unpickles allow-listed classes by default (weights_only=True).
-
-    pyannote 3.x checkpoints contain these four classes. Allow-listing exactly them keeps
-    the safety check on, unlike forcing weights_only=False for everything.
-    """
-    import importlib
-    import torch
-
-    if not hasattr(torch.serialization, "add_safe_globals"):
-        return  # older torch: no weights_only restriction to work around
-    classes = []
-    for path in ("torch.torch_version.TorchVersion",
-                 "pyannote.audio.core.task.Specifications",
-                 "pyannote.audio.core.task.Problem",
-                 "pyannote.audio.core.task.Resolution"):
-        mod, _, attr = path.rpartition(".")
-        try:
-            classes.append(getattr(importlib.import_module(mod), attr))
-        except (ImportError, AttributeError):
-            pass
-    torch.serialization.add_safe_globals(classes)
-
-
 def load_diarizer(force_cpu: bool):
     try:
         from pyannote.audio import Pipeline
         import torch
     except ImportError:
-        fail("pyannote.audio is not installed. Run:  pip install \"pyannote.audio==3.4.0\"")
+        fail("pyannote.audio is not installed. Run:  pip install \"pyannote.audio>=4,<5\"")
 
-    allow_pyannote_checkpoints()
     token = find_hf_token()
     print(f"{_CY}Loading speaker model '{DIARIZATION_MODEL}'...{_R}", file=sys.stderr)
 
     def _load(tok):
-        return Pipeline.from_pretrained(DIARIZATION_MODEL, use_auth_token=tok)
+        return Pipeline.from_pretrained(DIARIZATION_MODEL, token=tok)
 
     pipeline = None
     error = None
@@ -328,13 +302,12 @@ def load_diarizer(force_cpu: bool):
     if pipeline is None:
         hint = ("No token was found: set HF_TOKEN or run `huggingface-cli login`."
                 if token is None else
-                f"Check that you accepted the terms for {DIARIZATION_MODEL} and "
-                "pyannote/segmentation-3.0 on huggingface.co, and that the token is valid.")
+                f"Check that you accepted the terms for {DIARIZATION_MODEL} "
+                "on huggingface.co, and that the token is valid.")
         if error is None and token is not None:
             hint = ("pyannote returned no model, which usually means access to a gated model "
-                    "was denied. Open https://huggingface.co/pyannote/speaker-diarization-3.1 and "
-                    "https://huggingface.co/pyannote/segmentation-3.0 while logged in as the "
-                    "owner of this token and accept the terms on each. " + hint)
+                    "was denied. Open https://huggingface.co/pyannote/speaker-diarization-community-1 "
+                    "while logged in as the owner of this token and accept the terms. " + hint)
         fail(f"speaker model unavailable"
              f"{' (' + type(error).__name__ + ')' if error else ''}. {hint}")
 
@@ -357,7 +330,9 @@ def diarize(audio_path: Path, pipeline, num_speakers, min_speakers, max_speakers
         kwargs["min_speakers"] = min_speakers
     if max_speakers:
         kwargs["max_speakers"] = max_speakers
-    annotation = pipeline({"waveform": waveform, "sample_rate": SAMPLE_RATE}, **kwargs)
+    output = pipeline({"waveform": waveform, "sample_rate": SAMPLE_RATE}, **kwargs)
+    # "Exclusive" diarization has no overlapping turns, which suits matching words to speakers.
+    annotation = output.exclusive_speaker_diarization
     turns = [(t.start, t.end, spk) for t, _, spk in annotation.itertracks(yield_label=True)]
     turns.sort(key=lambda x: x[0])
     return turns

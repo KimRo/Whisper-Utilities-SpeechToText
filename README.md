@@ -10,7 +10,7 @@ Two offline speech-to-text tools powered by [faster-whisper](https://github.com/
 | `scripts/transcribe_file.py` | Batch file transcriber — transcribe an existing audio file from the command line |
 | `scripts/transcribe_speakers.py` | Speaker-labelled transcriber — transcribes a file and marks who says what (`Speaker 1`, `Speaker 2`, ...); needs a one-time free Hugging Face token, see [doc](doc/transcribe_speakers.md) |
 | `scripts/record_meeting.py` | Meeting recorder — records microphone + system audio to MP3, then offers to transcribe it |
-| `scripts/record_meeting_gui.py` | Window + system-tray version of the meeting recorder; `scripts\create_shortcut.bat` makes a one-click Desktop/Start Menu shortcut |
+| `scripts/record_meeting_gui.py` | Window + system-tray version of the meeting recorder; after stopping it can transcribe normally or with speaker labels (choose in the window); `scripts\create_shortcut.bat` makes a one-click Desktop/Start Menu shortcut |
 
 ## Installation
 
@@ -20,14 +20,14 @@ What the installer does:
 
 1. Checks for Python 3.10+ and installs it via `winget` if missing
 2. Upgrades `pip`
-3. Detects your NVIDIA GPU via `nvidia-smi` and selects the matching PyTorch CUDA variant (falls back to CPU if no GPU is found)
+3. Shows your NVIDIA GPU (via `nvidia-smi`) and lets you pick the PyTorch build: CPU-only, CUDA 12.6 (default), 12.8 or 13.0
 4. Installs all Python dependencies and verifies imports
 
 **Dependencies installed:**
 
 | Package | Purpose |
 |---|---|
-| `torch` | Deep learning runtime — CUDA 12.4 / 12.1 / 11.8 or CPU-only, selected automatically |
+| `torch` (2.11.0) | Deep learning runtime — you choose CPU-only, CUDA 12.6 (default), 12.8 or 13.0 during install |
 | `faster-whisper` | Whisper speech recognition engine |
 | `sounddevice` | Microphone audio capture |
 | `soundfile` | Audio file I/O |
@@ -35,8 +35,9 @@ What the installer does:
 | `PyAudioWPatch` | WASAPI loopback capture of system audio (meeting recorder) |
 | `pystray` | System-tray icon for the meeting recorder GUI (Pillow is installed with it) |
 | `numpy` | Audio buffer processing |
-| `torchaudio` | Installed with `torch` from the same index (required by pyannote.audio) |
-| `pyannote.audio` (3.4.0) | Speaker diarization for `transcribe_speakers.py` (with `huggingface_hub` below 1.0) |
+| `torchaudio` (2.11.0) | Installed with `torch`, same version and index (required by pyannote.audio) |
+| `pyannote.audio` (4.1.1) | Speaker diarization for `transcribe_speakers.py` (needs torch 2.8+) |
+| `av` (below 19) | Audio decoding/encoding (PyAV); 19 breaks the current faster-whisper |
 
 > Both scripts fall back to CPU automatically if CUDA is unavailable at runtime.
 
