@@ -17,6 +17,7 @@ is done): "Normal" runs transcribe_file.py, "With speakers" runs transcribe_spea
 labels who says what (needs the one-time Hugging Face token, see doc/transcribe_speakers.md).
 "Transcribe a recording..." does the same for any existing audio file you pick (the dialog
 opens in the recordings folder), using the mode, language and model selected in the window.
+The recording format (MP3 or WAV, both 16 kHz mono and sized for voice) is chosen below "Model".
 "Open last transcription" opens the newest transcript in the transcripts folder; it is greyed
 out while a transcription is running in the background (or when there is no transcript yet).
 
@@ -56,6 +57,7 @@ except ImportError:
     pystray = None  # tray is optional; window still works
 
 LANGUAGES = ["nl", "en", "fr", "de", "es", "it", "pt", "pl", "sv", "da", "no", "fi"]
+FORMATS = {"MP3 (small, 64 kbps voice)": "mp3", "WAV (16 kHz 16-bit, uncompressed)": "wav"}
 MODELS = ["tiny", "base", "small", "medium", "large-v2", "large-v3"]
 DEFAULT_MODEL = "medium"
 OFF = "Off (don't record this source)"
@@ -191,19 +193,24 @@ class App:
         self.model_box = ttk.Combobox(frm, textvariable=self.model, values=MODELS, width=8,
                                       state="readonly")
         self.model_box.grid(row=12, column=1, sticky="w", padx=(8, 0))
+        self.format = tk.StringVar(value=next(iter(FORMATS)))
+        ttk.Label(frm, text="Recording").grid(row=13, column=0, sticky="w")
+        self.format_box = ttk.Combobox(frm, textvariable=self.format, values=list(FORMATS),
+                                       width=34, state="readonly")
+        self.format_box.grid(row=13, column=1, columnspan=2, sticky="w", padx=(8, 0))
 
         btns = ttk.Frame(frm)
-        btns.grid(row=13, column=0, columnspan=3, pady=(12, 0), sticky="ew")
+        btns.grid(row=14, column=0, columnspan=3, pady=(12, 0), sticky="ew")
         self.pick_btn = ttk.Button(frm, text="Transcribe a recording…", command=self.pick_recording)
-        self.pick_btn.grid(row=14, column=0, columnspan=3, pady=(6, 0), sticky="ew")
+        self.pick_btn.grid(row=15, column=0, columnspan=3, pady=(6, 0), sticky="ew")
         self.open_btn = ttk.Button(frm, text="Open last transcription", command=self.open_last)
-        self.open_btn.grid(row=15, column=0, columnspan=3, pady=(6, 0), sticky="ew")
+        self.open_btn.grid(row=16, column=0, columnspan=3, pady=(6, 0), sticky="ew")
 
         # Feedback ("Saved ...", errors, warnings) always at the very bottom, clearly headed
         style = ttk.Style(root)
         style.configure("Status.TLabelframe.Label", font=("Segoe UI", 10, "bold"))
         status_frm = ttk.LabelFrame(frm, text="Status", style="Status.TLabelframe", padding=(8, 4))
-        status_frm.grid(row=16, column=0, columnspan=3, pady=(14, 0), sticky="ew")
+        status_frm.grid(row=17, column=0, columnspan=3, pady=(14, 0), sticky="ew")
         ttk.Label(status_frm, textvariable=self.status, wraplength=345).pack(anchor="w", fill="x")
         # Transcription progress/result: its own line so it never overwrites the recording status
         self.tx_events: "queue.Queue[tuple]" = queue.Queue()   # from the transcription threads
@@ -316,7 +323,7 @@ class App:
         if not can["record"]:
             self.btn.state(["disabled"])
             self.refresh_btn.state(["disabled"])
-            for box in (self.mic_box, self.sys_box):
+            for box in (self.mic_box, self.sys_box, self.format_box):
                 box.config(state="disabled")
             for cb in (self.duck_cb, self.stereo_cb):
                 cb.state(["disabled"])
@@ -360,6 +367,7 @@ class App:
         self.mic_box.config(state=state)
         self.sys_box.config(state=state)
         self.refresh_btn.state(["!disabled"] if enabled else ["disabled"])
+        self.format_box.config(state="readonly" if enabled and self.can["record"] else "disabled")
         self.duck_cb.state(["!disabled"] if enabled else ["disabled"])
         if enabled:
             self.update_channel_option()   # enabled only when both sources are on
@@ -393,7 +401,7 @@ class App:
             self.status.set(f"Could not open audio device: {e}")
             self.show()
             return
-        self.mp3_path = rm.build_name(None)
+        self.mp3_path = rm.build_name(None, FORMATS[self.format.get()])
         self.duck_enabled = self.duck.get()   # read here: Tk variables belong to the UI thread
         self.stereo_enabled = self.stereo.get()
         self.stop_evt.clear()

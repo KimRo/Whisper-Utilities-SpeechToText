@@ -37,7 +37,7 @@ Stop recording with **Enter** or **Ctrl+C**. While recording, the elapsed time a
 
 ## Output
 
-Recordings are saved to the repo-root `recordings\` folder as `<YYYY-MM-DD_HH-MM-SS>_<name>.mp3` (16 kHz; mono at 64 kbps, about 30 MB per hour, or stereo at 96 kbps, about 43 MB per hour, with separate channels). Transcripts end up in `transcripts\` as usual.
+Recordings are saved to the repo-root `recordings\` folder as `<YYYY-MM-DD_HH-MM-SS>_<name>.mp3` or `.wav` (chosen with the "Recording" list in the window). MP3 is 16 kHz, mono at 64 kbps, about 30 MB per hour, or stereo at 96 kbps, about 43 MB per hour, with separate channels. WAV is 16 kHz 16-bit uncompressed, about 115 MB per hour mono. Transcripts end up in `transcripts\` as usual.
 
 ## GUI and shortcut
 

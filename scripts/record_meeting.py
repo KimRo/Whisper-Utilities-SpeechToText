@@ -301,7 +301,8 @@ def transcribe_command(mp3_path: Path, name: str | None, language: str | None = 
 
 def record(sources: list[Source], mp3_path: Path, stop: threading.Event,
            on_tick=None, duck: bool = False, stereo: bool = False) -> float:
-    """Mix all sources and stream them into an MP3 until stop is set. Returns seconds.
+    """Mix all sources and stream them into an MP3 or WAV file (chosen by the suffix of
+    mp3_path) until stop is set. Returns seconds.
 
     on_tick(elapsed_seconds, sources) is called ~10x/s; without it a console line is printed.
     duck: lower the microphone while system audio plays (hybrid meetings, see Ducker);
@@ -313,9 +314,13 @@ def record(sources: list[Source], mp3_path: Path, stop: threading.Event,
     ducker = Ducker() if duck and labels >= {"mic", "sys"} else None
     dual = stereo and labels >= {"mic", "sys"}
     out = av.open(str(mp3_path), "w")
-    stream = out.add_stream("libmp3lame", rate=SAMPLE_RATE)
-    stream.layout = "stereo" if dual else "mono"
-    stream.bit_rate = STEREO_BITRATE if dual else MP3_BITRATE
+    if mp3_path.suffix.lower() == ".wav":
+        stream = out.add_stream("pcm_s16le", rate=SAMPLE_RATE)   # 16 kHz 16-bit PCM, no compression
+        stream.layout = "stereo" if dual else "mono"
+    else:
+        stream = out.add_stream("libmp3lame", rate=SAMPLE_RATE)
+        stream.layout = "stereo" if dual else "mono"
+        stream.bit_rate = STEREO_BITRATE if dual else MP3_BITRATE
 
     def write(samples: np.ndarray) -> None:
         # mono: shape (n,); stereo: shape (n, 2), written interleaved as L R L R ...
@@ -368,11 +373,11 @@ def record(sources: list[Source], mp3_path: Path, stop: threading.Event,
 
 
 # ── Main ────────────────────────────────────────────────────────────────────────
-def build_name(requested: str | None) -> Path:
+def build_name(requested: str | None, ext: str = "mp3") -> Path:
     RECORDINGS_DIR.mkdir(parents=True, exist_ok=True)
     name = Path(requested).stem if requested else "meeting"
     ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    return RECORDINGS_DIR / f"{ts}_{name}.mp3"
+    return RECORDINGS_DIR / f"{ts}_{name}.{ext}"
 
 
 def ask_yes(prompt: str) -> bool:
