@@ -18,7 +18,9 @@ Stop recording with Enter or Ctrl+C.
 
 Options:
     -o, --output      Name part of the file (default: meeting). Saved to the
-                      recordings folder as <YYYY-MM-DD_HH-MM-SS>_<name>.mp3
+                      recordings folder as <YYYY-MM-DD_HH-MM-SS>_<name>.mp3 (or .wav)
+    --format          mp3 | wav (default: mp3). mp3: 16 kHz, 64 kbps voice; wav: 16 kHz
+                      16-bit uncompressed (about 4x larger)
     --mic ID          Microphone device id (default: Windows default input)
     --loopback ID     Loopback (system audio) device id (default: default output)
     --no-mic          Do not record the microphone
@@ -387,8 +389,9 @@ def ask_yes(prompt: str) -> bool:
 
 def main() -> None:
     require_recording_packages()
-    ap = argparse.ArgumentParser(description="Record microphone + system audio to MP3")
+    ap = argparse.ArgumentParser(description="Record microphone + system audio to MP3 or WAV")
     ap.add_argument("-o", "--output")
+    ap.add_argument("--format", choices=["mp3", "wav"], default="mp3")
     ap.add_argument("--mic", type=int)
     ap.add_argument("--loopback", type=int)
     ap.add_argument("--no-mic", action="store_true")
@@ -430,7 +433,7 @@ def main() -> None:
     for s in sources:
         info(f"{_DIM}{'Microphone' if s.label == 'mic' else 'System    '} : {s.dev['name']}{_R}")
 
-    mp3_path = build_name(args.output)
+    mp3_path = build_name(args.output, args.format)
     info(f"\n{_B}{_WH}Recording to{_R} {mp3_path}")
     info(f"{_DIM}Press Enter (or Ctrl+C) to stop.{_R}\n")
 

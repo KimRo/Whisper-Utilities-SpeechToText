@@ -27,6 +27,7 @@ Stop recording with **Enter** or **Ctrl+C**. While recording, the elapsed time a
 | `--loopback ID` | System-audio device id (default: loopback of the default output device) |
 | `--no-mic` | Record system audio only |
 | `--no-system` | Record microphone only |
+| `--format mp3\|wav` | Recording format (default `mp3`): MP3 at 64 kbps, or uncompressed 16 kHz 16-bit WAV (about 4x larger) |
 | `--duck` | Hybrid-meeting mode: lower the microphone while system audio plays (see below) |
 | `--separate-channels` | Stereo MP3 with the microphone on the left and system audio on the right, instead of one mixed channel (see below) |
 | `--list-devices` | Print device ids and exit |
