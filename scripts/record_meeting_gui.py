@@ -18,6 +18,9 @@ labels who says what (needs the one-time Hugging Face token, see doc/transcribe_
 "Transcribe a recording..." does the same for any existing audio file you pick (the dialog
 opens in the recordings folder), using the mode, language and model selected in the window.
 The recording format (MP3 or WAV, both 16 kHz mono and sized for voice) is chosen below "Model".
+Everything shown in the Status box is also logged, with timestamps, to recordings/<recording name>.log.txt
+(next to the recording; transcribing an existing file appends to <that file's name>.log.txt).
+"Open log" (below the Status box) opens the log of the running transcription, else the newest log.
 "Open last transcription" opens the newest transcript in the transcripts folder; it is greyed
 out while a transcription is running in the background (or when there is no transcript yet).
 
@@ -218,6 +221,8 @@ class App:
         self.job_seq = 0
         self.tx_status = tk.StringVar(value="")
         self.tx_label = ttk.Label(status_frm, textvariable=self.tx_status, wraplength=345)
+        self.log_btn = ttk.Button(frm, text="Open log", command=self.open_log)
+        self.log_btn.grid(row=18, column=0, columnspan=3, pady=(6, 0), sticky="ew")
         self.btn = ttk.Button(btns, text="● Start recording", command=self.toggle)
         self.btn.pack(side="left", expand=True, fill="x")
         self.tray_btn = ttk.Button(btns, text="Minimize to tray", command=self.to_tray)
@@ -229,6 +234,9 @@ class App:
         self.missing, self.can = check_requirements()
         self.apply_requirements()
         self.update_open_btn()
+        self.cur_log: Path | None = None               # log of the activity the Status box shows
+        self.update_log_btn()
+        self.status.trace_add("write", lambda *_: self.log(self.cur_log, self.status.get()))
         if self.can["record"]:
             self.refresh_devices()
         self.poll()
@@ -384,6 +392,7 @@ class App:
     def start(self):
         if self.recording or (self.thread and self.thread.is_alive()):
             return
+        self.cur_log = None                # failures before a file exists are not logged
         if not self.can["record"]:
             self.status.set(missing_report(self.missing))
             self.show()
@@ -402,6 +411,7 @@ class App:
             self.show()
             return
         self.mp3_path = rm.build_name(None, FORMATS[self.format.get()])
+        self.cur_log = self.log_path_for(self.mp3_path)
         self.duck_enabled = self.duck.get()   # read here: Tk variables belong to the UI thread
         self.stereo_enabled = self.stereo.get()
         self.stop_evt.clear()
@@ -472,6 +482,7 @@ class App:
         if not chosen:
             return  # cancelled
         path = Path(chosen)
+        self.cur_log = self.log_path_for(path)
         self.status.set(f"Selected {path.name}")
         self.launch_transcription(path, name=path.stem)
 
@@ -496,6 +507,45 @@ class App:
         except OSError as e:
             self.status.set(f"Could not open {path.name}: {e}")
 
+    # ── Log file ────────────────────────────────────────────────────────────────
+    @staticmethod
+    def log_path_for(audio: Path) -> Path:
+        """recordings/<audio name without extension>.log.txt"""
+        return rm.RECORDINGS_DIR / f"{audio.stem}.log.txt"
+
+    def log(self, path: Path | None, text: str):
+        """Append a timestamped entry (multi-line text is indented) to a log file."""
+        if path is None or not text:
+            return
+        stamp = time.strftime("%Y-%m-%d %H:%M:%S")
+        body = text.replace("\n", "\n" + " " * 21)
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with open(path, "a", encoding="utf-8") as f:
+                f.write(f"{stamp}  {body}\n")
+        except OSError:
+            return                                     # logging must never break the window
+        self.log_btn.state(["!disabled"])
+
+    def newest_log(self) -> Path | None:
+        d = rm.RECORDINGS_DIR
+        files = list(d.glob("*.log.txt")) if d.is_dir() else []
+        return max(files, key=lambda f: f.stat().st_mtime, default=None)
+
+    def update_log_btn(self):
+        self.log_btn.state(["!disabled"] if self.newest_log() else ["disabled"])
+
+    def open_log(self):
+        running = [j["log"] for j in self.jobs.values() if j["log"].exists()]
+        path = running[-1] if running else self.newest_log()
+        if path is None:
+            self.status.set("No log found yet.")
+            return
+        try:
+            os.startfile(path)
+        except OSError as e:
+            self.status.set(f"Could not open {path.name}: {e}")
+
     def launch_transcription(self, path, name="meeting"):
         """Transcribe in a hidden background process; progress and result show in the Status box."""
         with_speakers = self.mode.get() == "speakers"
@@ -505,8 +555,11 @@ class App:
         cmd[0] = str(Path(sys.executable).with_name("python.exe"))
         self.job_seq += 1
         jid = self.job_seq
+        log = self.log_path_for(path)
         self.jobs[jid] = {"file": path.name, "start": time.monotonic(), "stage": "Starting",
-                          "kind": "with speakers" if with_speakers else "normal"}
+                          "kind": "with speakers" if with_speakers else "normal", "log": log}
+        self.log(log, f"Transcribing {path.name} ({self.jobs[jid]['kind']}, language "
+                      f"{self.lang.get() or 'auto'}, model {self.model.get() or 'default'})")
         threading.Thread(target=self.run_transcription, args=(jid, cmd), daemon=True).start()
         self.update_tx_progress()
         self.update_open_btn()
@@ -577,10 +630,13 @@ class App:
             job = self.jobs.get(jid)
             if kind == "stage" and job is not None:
                 job["stage"] = rest[0]
+                self.log(job["log"], rest[0])
             elif kind == "done" and job is not None:
                 ok, detail = rest
                 del self.jobs[jid]
                 finished = True
+                self.log(job["log"], (f"Transcription finished: {detail}" if ok
+                                      else f"Transcription failed: {detail[:300]}"))
                 if ok:
                     self.set_tx(f"Transcription finished: {job['file']}\nSaved as {detail}"
                                 if detail.endswith(".txt") else
