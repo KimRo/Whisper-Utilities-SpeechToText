@@ -17,6 +17,8 @@ is done): "Normal" runs transcribe_file.py, "With speakers" runs transcribe_spea
 labels who says what (needs the one-time Hugging Face token, see doc/transcribe_speakers.md).
 "Transcribe a recording..." does the same for any existing audio file you pick (the dialog
 opens in the recordings folder), using the mode, language and model selected in the window.
+"Open last transcription" opens the newest transcript in the transcripts folder; it is greyed
+out while a transcription is running in the background (or when there is no transcript yet).
 
 At start-up the window checks which packages are installed. Options that cannot work are
 greyed out and the Status box lists what is missing (scripts\\install.bat installs it).
@@ -59,6 +61,7 @@ DEFAULT_MODEL = "medium"
 OFF = "Off (don't record this source)"
 ANSI = re.compile(r"\x1b\[[0-9;]*m")                     # colour codes in the scripts' output
 STAGES = ("Loading", "Transcribing", "Identifying", "Language")   # progress lines worth showing
+TRANSCRIPT_DIR = rm.RECORDINGS_DIR.parent / "transcripts"   # where the transcribe scripts save
 TX_COLORS = {"busy": "#555555", "ok": "#1a7f37", "fail": "#c62828"}
 
 def check_requirements() -> tuple[dict, dict]:
@@ -193,12 +196,14 @@ class App:
         btns.grid(row=13, column=0, columnspan=3, pady=(12, 0), sticky="ew")
         self.pick_btn = ttk.Button(frm, text="Transcribe a recording…", command=self.pick_recording)
         self.pick_btn.grid(row=14, column=0, columnspan=3, pady=(6, 0), sticky="ew")
+        self.open_btn = ttk.Button(frm, text="Open last transcription", command=self.open_last)
+        self.open_btn.grid(row=15, column=0, columnspan=3, pady=(6, 0), sticky="ew")
 
         # Feedback ("Saved ...", errors, warnings) always at the very bottom, clearly headed
         style = ttk.Style(root)
         style.configure("Status.TLabelframe.Label", font=("Segoe UI", 10, "bold"))
         status_frm = ttk.LabelFrame(frm, text="Status", style="Status.TLabelframe", padding=(8, 4))
-        status_frm.grid(row=15, column=0, columnspan=3, pady=(14, 0), sticky="ew")
+        status_frm.grid(row=16, column=0, columnspan=3, pady=(14, 0), sticky="ew")
         ttk.Label(status_frm, textvariable=self.status, wraplength=345).pack(anchor="w", fill="x")
         # Transcription progress/result: its own line so it never overwrites the recording status
         self.tx_events: "queue.Queue[tuple]" = queue.Queue()   # from the transcription threads
@@ -216,6 +221,7 @@ class App:
         self.pa = None
         self.missing, self.can = check_requirements()
         self.apply_requirements()
+        self.update_open_btn()
         if self.can["record"]:
             self.refresh_devices()
         self.poll()
@@ -461,6 +467,27 @@ class App:
         self.status.set(f"Selected {path.name}")
         self.launch_transcription(path, name=path.stem)
 
+    @staticmethod
+    def last_transcript() -> Path | None:
+        """The newest transcript in the transcripts folder, or None."""
+        files = [f for f in TRANSCRIPT_DIR.glob("*.txt") if f.is_file()] if TRANSCRIPT_DIR.is_dir() else []
+        return max(files, key=lambda f: f.stat().st_mtime, default=None)
+
+    def update_open_btn(self):
+        """'Open last transcription' is greyed out while a transcription runs or none exists."""
+        ok = not self.jobs and self.last_transcript() is not None
+        self.open_btn.state(["!disabled"] if ok else ["disabled"])
+
+    def open_last(self):
+        path = self.last_transcript()
+        if path is None:
+            self.status.set("No transcription found yet.")
+            return
+        try:
+            os.startfile(path)
+        except OSError as e:
+            self.status.set(f"Could not open {path.name}: {e}")
+
     def launch_transcription(self, path, name="meeting"):
         """Transcribe in a hidden background process; progress and result show in the Status box."""
         with_speakers = self.mode.get() == "speakers"
@@ -474,6 +501,7 @@ class App:
                           "kind": "with speakers" if with_speakers else "normal"}
         threading.Thread(target=self.run_transcription, args=(jid, cmd), daemon=True).start()
         self.update_tx_progress()
+        self.update_open_btn()
 
     def run_transcription(self, jid: int, cmd: list):
         """Worker thread: run the script without a console window and report back via tx_events."""
@@ -552,6 +580,7 @@ class App:
                 else:
                     self.set_tx(f"Transcription failed: {job['file']}\n{detail[:300]}", "fail")
         if finished:
+            self.update_open_btn()
             if self.jobs:
                 self.update_tx_progress()      # others are still running: keep showing them
             self.show()                        # back to the window (also out of the tray)
