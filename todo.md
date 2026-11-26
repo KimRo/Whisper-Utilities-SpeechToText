@@ -16,4 +16,3 @@ Steps:
 - [x] Update the setup steps in the script docstring and `doc/transcribe_speakers.md` (model pages to accept).
 - [x] Update the pin in `install.ps1`, `uninstall.ps1` and `README.md`.
 - [x] Check that `faster-whisper`/`ctranslate2` still work with the newer torch and CUDA build. (ctranslate2 4.9.1 loads CUDA fine. Found: PyAV 19 breaks faster-whisper 1.2.1, so `av<19` is pinned.)
-- [ ] Test on a two-speaker sample and compare with the 3.4.0 output (optional, 3.4.0 is no longer installed).
