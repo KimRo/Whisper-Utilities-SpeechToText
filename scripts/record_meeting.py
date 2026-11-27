@@ -18,7 +18,8 @@ Stop recording with Enter or Ctrl+C.
 
 Options:
     -o, --output      Name part of the file (default: meeting). Saved to the
-                      Recordings folder (Documents/Meeting Recorder/Recordings) as <YYYY-MM-DD_HH-MM-SS>_<name>.mp3 (or .wav)
+                      <output folder>/<YYYY-MM-DD_HH-MM-SS>_<name>/<YYYY-MM-DD_HH-MM-SS>_<name>.mp3 (or .wav);
+                      every recording has its own folder, which also holds its transcript
     --format          mp3 | wav (default: mp3). mp3: 16 kHz, 64 kbps voice; wav: 16 kHz
                       16-bit uncompressed (about 4x larger)
     --mic ID|NAME     Microphone: device id, (part of) a device name, "default" or "off"
@@ -33,9 +34,8 @@ Options:
                       Stereo MP3: microphone on the left channel, system audio on the right
                       (instead of mixing both to mono). Lets transcribe_speakers.py label
                       your own voice as "You". Needs both a microphone and system audio.
-    --output-dir DIR  Folder for the recording (default: the recordings folder)
-    --transcript-dir DIR
-                      Folder for the transcript (default: the transcripts folder)
+    --output-dir DIR  The output folder (default: Documents\\Meeting Recorder). Each recording gets
+                      its own subfolder <timestamp>_<name> in it, which also holds the transcript
     --settings FILE   Settings file to use (default: %APPDATA%\\WhisperMeetingRecorder\\settings.json)
     --list-devices    Show available devices and exit
     --transcribe      ask | yes | no (default: ask) — run transcribe_file.py afterwards
@@ -73,8 +73,6 @@ try:
 except ImportError:
     np = None
 
-# Default recordings folder: Documents\Meeting Recorder\Recordings (see meeting_settings)
-RECORDINGS_DIR = meeting_settings.DEFAULT_RECORDINGS   # Documents\Meeting Recorder\Recordings
 SCRIPT_DIR = Path(__file__).resolve().parent
 
 SAMPLE_RATE = 16000        # Whisper's native rate; plenty for speech
@@ -471,11 +469,14 @@ def merge_audio(parts: list[Path], dest: Path) -> float:
 
 
 # ── Main ────────────────────────────────────────────────────────────────────────
-def build_name(requested: str | None, ext: str = "mp3", folder: Path | None = None) -> Path:
-    folder = folder or RECORDINGS_DIR
-    folder.mkdir(parents=True, exist_ok=True)
+def build_name(requested: str | None, ext: str = "mp3", root: Path | None = None) -> Path:
+    """Path of a new recording: <output folder>/<timestamp>_<name>/<timestamp>_<name>.<ext>.
+    Every meeting gets its own folder, which also holds its transcript and log."""
+    root = root or meeting_settings.output_root()
     name = Path(requested).stem if requested else "meeting"
     ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    folder = root / f"{ts}_{name}"
+    folder.mkdir(parents=True, exist_ok=True)
     return folder / f"{ts}_{name}.{ext}"
 
 
@@ -508,9 +509,8 @@ def main() -> None:
     ap = argparse.ArgumentParser(description="Record microphone + system audio to MP3 or WAV")
     ap.add_argument("-o", "--output")
     ap.add_argument("--format", choices=["mp3", "wav"])
-    ap.add_argument("--output-dir", type=Path, help="folder for the recording (default: recordings)")
-    ap.add_argument("--transcript-dir", type=Path,
-                    help="folder for the transcript (default: transcripts)")
+    ap.add_argument("--output-dir", type=Path,
+                    help="the output folder; each recording gets its own subfolder in it")
     ap.add_argument("--mic")
     ap.add_argument("--loopback", "--system", dest="loopback")
     ap.add_argument("--no-mic", action="store_true")
@@ -529,10 +529,7 @@ def main() -> None:
     saved = meeting_settings.load(args.settings)
     pick = lambda key, cli, default: meeting_settings.resolve(key, cli, saved, default)   # noqa: E731
     args.format = pick("format", args.format, "mp3")
-    args.output_dir = (args.output_dir or
-                       (Path(saved["output_dir"]) if "output_dir" in saved else None))
-    args.transcript_dir = (args.transcript_dir or
-                           (Path(saved["transcript_dir"]) if "transcript_dir" in saved else None))
+    out_root = args.output_dir or meeting_settings.output_root(args.settings)
     args.duck = pick("duck", args.duck, False)
     args.separate_channels = pick("separate_channels", args.separate_channels, False)
     args.language = pick("language", args.language, None)
@@ -575,7 +572,7 @@ def main() -> None:
     for s in sources:
         info(f"{_DIM}{'Microphone' if s.label == 'mic' else 'System    '} : {s.dev['name']}{_R}")
 
-    mp3_path = build_name(args.output, args.format, args.output_dir)
+    mp3_path = build_name(args.output, args.format, out_root)
     info(f"\n{_B}{_WH}Recording to{_R} {mp3_path}")
     info(f"{_DIM}Press Enter (or Ctrl+C) to stop.{_R}\n")
 
@@ -617,7 +614,7 @@ def main() -> None:
     if do_transcribe:
         sys.exit(subprocess.call(
             transcribe_command(mp3_path, args.output, args.language, args.model, args.cpu,
-                               output_dir=args.transcript_dir)))
+                               output_dir=mp3_path.parent)))
 
 
 if __name__ == "__main__":

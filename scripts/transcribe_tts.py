@@ -70,7 +70,7 @@ _WH  = "\033[97m"  # bright white  — transcript text
 
 # ── Constants ──────────────────────────────────────────────────────────────────
 SAMPLE_RATE = 16000
-TRANSCRIPT_DIR = meeting_settings.DEFAULT_TRANSCRIPTS   # Documents/Meeting Recorder/Transcripts
+OUTPUT_ROOT = meeting_settings.output_root()   # the meeting recorder's output folder
 LANG_NAMES = {
     "en": "English", "nl": "Dutch",
     "ar": "Arabic",  "zh": "Chinese",  "cs": "Czech",     "da": "Danish",
@@ -427,9 +427,10 @@ def load_model(size: str, force_cpu: bool) -> WhisperModel:
 
 def create_session() -> None:
     global session_file
-    TRANSCRIPT_DIR.mkdir(parents=True, exist_ok=True)
     ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    session_file = TRANSCRIPT_DIR / f"{ts}_session.txt"
+    folder = OUTPUT_ROOT / f"{ts}_session"          # one folder per session, like a meeting
+    folder.mkdir(parents=True, exist_ok=True)
+    session_file = folder / f"{ts}_session.txt"
     session_file.touch()
 
 # ── Entry ───────────────────────────────────────────────────────────────────────

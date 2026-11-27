@@ -72,7 +72,7 @@ for _msg in (r"TensorFloat-32 \(TF32\) has been disabled",    # pyannote turns T
     warnings.filterwarnings("ignore", message=_msg)
 
 # Repo-root "transcripts" folder (same location for all scripts)
-TRANSCRIPT_DIR = meeting_settings.DEFAULT_TRANSCRIPTS   # Documents\Meeting Recorder\Transcripts
+OUTPUT_ROOT = meeting_settings.output_root()   # one subfolder per transcription in it
 
 DIARIZATION_MODEL = "pyannote/speaker-diarization-community-1"
 SAMPLE_RATE = 16000
@@ -230,11 +230,12 @@ def parse_names(raw: str | None) -> list[str] | None:
 
 def build_output_path(audio_path: Path, requested: Path | None,
                       output_dir: Path | None = None) -> Path:
-    """Write into the transcripts folder (or output_dir) as '<timestamp>_<original name>.txt'."""
-    folder = output_dir or TRANSCRIPT_DIR
-    folder.mkdir(parents=True, exist_ok=True)
+    """Write '<timestamp>_<name>.txt' into output_dir, or by default into its own subfolder
+    <output folder>/<timestamp>_<name>."""
     stem = requested.stem if requested else audio_path.stem
     ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    folder = output_dir or OUTPUT_ROOT / f"{ts}_{stem}"
+    folder.mkdir(parents=True, exist_ok=True)
     return folder / f"{ts}_{stem}.txt"
 
 
@@ -531,7 +532,7 @@ def main() -> None:
                              "the transcripts folder as <timestamp>_<name>.txt")
     parser.add_argument("--model", default=None, help=f"Whisper model size (default: {DEFAULT_MODEL})")
     parser.add_argument("--output-dir", type=Path, default=None,
-                        help="Folder to save the transcript in (default: the transcripts folder)")
+                        help="Folder to save the transcript in (default: a new subfolder of the output folder)")
     parser.add_argument("--cpu", action="store_true", help="Force CPU inference")
     parser.add_argument("--speakers", type=int, default=None, help="Exact number of speakers")
     parser.add_argument("--min-speakers", type=int, default=None, help="Minimum number of speakers")

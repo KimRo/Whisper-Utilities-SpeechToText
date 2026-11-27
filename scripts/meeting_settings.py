@@ -14,7 +14,7 @@ Keys (all optional):
     model            Whisper model size
     format           "mp3" | "wav"
     chunk_minutes    0 = off, else 1..60
-    output_dir, transcript_dir, log_dir        folder paths
+    output_root      the one output folder (one subfolder per meeting inside it)
 """
 
 from __future__ import annotations
@@ -52,11 +52,9 @@ def documents_dir() -> Path:
     return Path.home() / "Documents"
 
 
-# Default output folders (each can be changed in the GUI or with --output-dir etc.)
+# One output folder; every meeting gets its own subfolder in it (<timestamp>_<name>) that holds
+# the recording, the transcript and the log file.
 DEFAULT_ROOT = documents_dir() / "Meeting Recorder"
-DEFAULT_RECORDINGS = DEFAULT_ROOT / "Recordings"
-DEFAULT_TRANSCRIPTS = DEFAULT_ROOT / "Transcripts"
-DEFAULT_LOGS = DEFAULT_ROOT / "Logs"
 
 DEFAULT_PATH = (Path(os.environ.get("APPDATA") or Path.home()) /
                 "WhisperMeetingRecorder" / "settings.json")
@@ -71,7 +69,7 @@ KEYS = {
     "language": _STR, "model": _STR,
     "format": lambda v: v in ("mp3", "wav"),
     "chunk_minutes": lambda v: isinstance(v, int) and not isinstance(v, bool) and 0 <= v <= 60,
-    "output_dir": _STR, "transcript_dir": _STR, "log_dir": _STR,
+    "output_root": _STR,
 }
 
 
@@ -108,6 +106,11 @@ def save_key(key: str, value, path: Path | None = None) -> bool:
         return True
     except OSError:
         return False
+
+
+def output_root(settings_path: Path | None = None) -> Path:
+    """The output folder: the saved one, else the default (Documents\\Meeting Recorder)."""
+    return Path(load(settings_path).get("output_root") or DEFAULT_ROOT)
 
 
 def resolve(key: str, cli_value, stored: dict, default):

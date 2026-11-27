@@ -1,6 +1,6 @@
 # transcribe_file.md — Audio File Transcriber
 
-Transcribes an existing audio file and writes the result to a timestamped `.txt` file in the transcripts folder (`Documents\Meeting Recorder\Transcripts`, or the folder given with `--output-dir`). Can be run interactively (no arguments) or fully from the command line.
+Transcribes an existing audio file and writes the result to a timestamped `.txt` file in a new `<timestamp>_<name>` folder of the output folder (default: `Documents\Meeting Recorder`, see [record_meeting.md](record_meeting.md)), or directly in the folder given with `--output-dir`. Can be run interactively (no arguments) or fully from the command line.
 
 ## Usage
 
@@ -67,7 +67,7 @@ python scripts/transcribe_file.py audio.mp3 --cpu
 
 ## Output
 
-- The transcribed text is written (UTF-8) to `Documents\Meeting Recorder\Transcripts\<YYYY-MM-DD_HH-MM-SS>_<name>.txt` (or the `--output-dir` folder). The folder is created if it doesn't exist.
+- The transcribed text is written (UTF-8) to `<output folder>\<YYYY-MM-DD_HH-MM-SS>_<name>\<YYYY-MM-DD_HH-MM-SS>_<name>.txt` (or the `--output-dir` folder). The folder is created if it doesn't exist.
 - The same text is also printed to **stdout**, so you can pipe it:
   ```powershell
   python scripts/transcribe_file.py audio.mp3 | clip

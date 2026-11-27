@@ -7,7 +7,8 @@ Usage:
     python scripts/record_meeting_gui.py --autostart  # open and start recording at once
     python scripts/record_meeting_gui.py --autostart --tray   # ... and start minimized to tray
 
-Records microphone + system audio with the default devices to the Audio folder as <timestamp>_meeting.mp3 (default Documents/Meeting Recorder/Recordings).
+Records microphone + system audio with the default devices to <Output folder>/<timestamp>_meeting/<timestamp>_meeting.mp3 (default output folder: Documents/Meeting Recorder);
+the transcript and the log file are saved in that same folder.
 The optional "Name" field replaces "meeting" in the file names (e.g. <timestamp>_Budget_review.mp3).
 The window can be minimized to the system tray (the window's minimize button, the
 "Minimize to tray" button, or closing the window while recording).
@@ -19,7 +20,7 @@ labels who says what (needs the one-time Hugging Face token, see doc/transcribe_
 "Transcribe a recording..." does the same for any existing audio file you pick (the dialog
 opens in the recordings folder), using the mode, language and model selected in the window.
 The recording format (MP3 or WAV, both 16 kHz mono and sized for voice) is chosen below "Model".
-Everything shown in the Status box is also logged, with timestamps, to <Log folder>/<recording name>.log.txt (default Documents/Meeting Recorder/Logs)
+Everything shown in the Status box is also logged, with timestamps, to <recording folder>/<recording name>.log.txt
 (next to the recording; transcribing an existing file appends to <that file's name>.log.txt).
 "Open log" (below the Status box) opens the log of the running transcription, else the newest log.
 The "Also transcribe while recording, every N min" field (0 = off) splits a long recording into part files
@@ -76,7 +77,6 @@ DEFAULT_MODEL = "medium"
 OFF = "Off (don't record this source)"
 ANSI = re.compile(r"\x1b\[[0-9;]*m")                     # colour codes in the scripts' output
 STAGES = ("Loading", "Transcribing", "Identifying", "Language")   # progress lines worth showing
-TRANSCRIPT_DIR = ms.DEFAULT_TRANSCRIPTS   # default folder for transcripts
 TX_COLORS = {"busy": "#555555", "ok": "#1a7f37", "fail": "#c62828"}
 STAMP = re.compile(r"^\[(\d+):(\d\d):(\d\d)\]", re.M)             # "[HH:MM:SS]" at a line start
 MIN_PART = 1.0                                                   # shorter parts are not transcribed
@@ -165,9 +165,8 @@ class App:
         self.part_pending = 0                            # parts queued or being transcribed
         self.part_cur: dict | None = None                # the part being transcribed right now
         self.chunk_seconds = 0
-        self.rec_dir = rm.RECORDINGS_DIR                # where recordings and logs are saved
-        self.tx_dir = TRANSCRIPT_DIR                    # where transcripts are saved
-        self.log_dir = ms.DEFAULT_LOGS                  # where the log files are saved
+        self.root_dir = ms.DEFAULT_ROOT                 # the output folder
+        self.meeting_dirs: dict[Path, Path] = {}        # audio file -> its meeting folder
 
         root.title("Meeting Recorder")
         root.resizable(False, False)
@@ -264,32 +263,29 @@ class App:
         self.chunk_spin.pack(side="left", padx=(6, 0))
         ttk.Label(chunk_frm, text="min (0 = off)").pack(side="left", padx=(4, 0))
 
-        self.rec_dir_var = tk.StringVar(value=str(self.rec_dir))
-        self.tx_dir_var = tk.StringVar(value=str(self.tx_dir))
-        self.log_dir_var = tk.StringVar(value=str(self.log_dir))
-        self.dir_btns = []
-        for r, (text, var, kind) in enumerate((("Audio folder", self.rec_dir_var, "rec"),
-                                               ("Transcript folder", self.tx_dir_var, "tx"),
-                                               ("Log folder", self.log_dir_var, "log")), 15):
-            ttk.Label(frm, text=text).grid(row=r, column=0, sticky="w", pady=(4, 0))
-            ttk.Entry(frm, textvariable=var, state="readonly", width=34).grid(
-                row=r, column=1, sticky="ew", padx=(8, 0), pady=(4, 0))
-            b = ttk.Button(frm, text="…", width=3, command=lambda k=kind: self.pick_dir(k))
-            b.grid(row=r, column=2, padx=(4, 0), pady=(4, 0))
-            self.dir_btns.append(b)
+        # One output folder; Recordings, Transcripts and Logs are subfolders of it
+        self.root_dir_var = tk.StringVar(value=str(self.root_dir))
+        ttk.Label(frm, text="Output folder").grid(row=15, column=0, sticky="w", pady=(4, 0))
+        ttk.Entry(frm, textvariable=self.root_dir_var, state="readonly", width=34).grid(
+            row=15, column=1, sticky="ew", padx=(8, 0), pady=(4, 0))
+        self.dir_btn = ttk.Button(frm, text="…", width=3, command=self.pick_dir)
+        self.dir_btn.grid(row=15, column=2, padx=(4, 0), pady=(4, 0))
+        self.dir_btns = [self.dir_btn]
+        ttk.Label(frm, text="Every recording gets its own subfolder (audio, transcript, log).",
+                  foreground="#666666").grid(row=16, column=0, columnspan=3, sticky="w")
 
         btns = ttk.Frame(frm)
-        btns.grid(row=18, column=0, columnspan=3, pady=(12, 0), sticky="ew")
+        btns.grid(row=17, column=0, columnspan=3, pady=(12, 0), sticky="ew")
         self.pick_btn = ttk.Button(frm, text="Transcribe a recording…", command=self.pick_recording)
-        self.pick_btn.grid(row=19, column=0, columnspan=3, pady=(6, 0), sticky="ew")
+        self.pick_btn.grid(row=18, column=0, columnspan=3, pady=(6, 0), sticky="ew")
         self.open_btn = ttk.Button(frm, text="Open last transcription", command=self.open_last)
-        self.open_btn.grid(row=20, column=0, columnspan=3, pady=(6, 0), sticky="ew")
+        self.open_btn.grid(row=19, column=0, columnspan=3, pady=(6, 0), sticky="ew")
 
         # Feedback ("Saved ...", errors, warnings) always at the very bottom, clearly headed
         style = ttk.Style(root)
         style.configure("Status.TLabelframe.Label", font=("Segoe UI", 10, "bold"))
         status_frm = ttk.LabelFrame(frm, text="Status", style="Status.TLabelframe", padding=(8, 4))
-        status_frm.grid(row=21, column=0, columnspan=3, pady=(14, 0), sticky="ew")
+        status_frm.grid(row=20, column=0, columnspan=3, pady=(14, 0), sticky="ew")
         ttk.Label(status_frm, textvariable=self.status, wraplength=345).pack(anchor="w", fill="x")
         # Transcription progress/result: its own line so it never overwrites the recording status
         self.tx_events: "queue.Queue[tuple]" = queue.Queue()   # from the transcription threads
@@ -298,7 +294,7 @@ class App:
         self.tx_status = tk.StringVar(value="")
         self.tx_label = ttk.Label(status_frm, textvariable=self.tx_status, wraplength=345)
         self.log_btn = ttk.Button(frm, text="Open log", command=self.open_log)
-        self.log_btn.grid(row=22, column=0, columnspan=3, pady=(6, 0), sticky="ew")
+        self.log_btn.grid(row=21, column=0, columnspan=3, pady=(6, 0), sticky="ew")
         self.btn = ttk.Button(btns, text="● Start recording", command=self.toggle)
         self.btn.pack(side="left", expand=True, fill="x")
         self.tray_btn = ttk.Button(btns, text="Minimize to tray", command=self.to_tray)
@@ -344,14 +340,26 @@ class App:
         fmt = get("format", "mp3")
         self.format.set(next((k for k, v in FORMATS.items() if v == fmt), next(iter(FORMATS))))
         self.chunk_var.set(str(get("chunk_minutes", 5)))
-        self.rec_dir = Path(get("output_dir", str(self.rec_dir)))
-        self.rec_dir_var.set(str(self.rec_dir))
-        self.tx_dir = Path(get("transcript_dir", str(self.tx_dir)))
-        self.tx_dir_var.set(str(self.tx_dir))
-        self.log_dir = Path(get("log_dir", str(self.log_dir)))
-        self.log_dir_var.set(str(self.log_dir))
+        self.set_root(Path(get("output_root", str(ms.DEFAULT_ROOT))))
         if cli.get("name"):
             self.rec_name.set(cli["name"])
+
+    def set_root(self, root: Path):
+        """Set the output folder (every meeting gets a subfolder in it)."""
+        self.root_dir = root
+        if hasattr(self, "root_dir_var"):
+            self.root_dir_var.set(str(root))
+
+    def meeting_dir(self, audio: Path) -> Path:
+        """The folder that holds the transcript and log of an audio file: its own folder when it
+        is a recording inside the output folder; otherwise a new <timestamp>_<name> folder there."""
+        if audio not in self.meeting_dirs:
+            if audio.parent.parent == self.root_dir:
+                folder = audio.parent
+            else:
+                folder = self.root_dir / f"{time.strftime('%Y-%m-%d_%H-%M-%S')}_{audio.stem}"
+            self.meeting_dirs[audio] = folder
+        return self.meeting_dirs[audio]
 
     def save_setting(self, key: str, value):
         if not self.loading:
@@ -573,7 +581,7 @@ class App:
             self.show()
             return
         self.name = clean_name(self.rec_name.get())
-        self.mp3_path = rm.build_name(self.name, FORMATS[self.format.get()], self.rec_dir)
+        self.mp3_path = rm.build_name(self.name, FORMATS[self.format.get()], self.root_dir)
         self.cur_log = self.log_path_for(self.mp3_path)
         self.duck_enabled = self.duck.get()   # read here: Tk variables belong to the UI thread
         self.stereo_enabled = self.stereo.get()
@@ -657,9 +665,9 @@ class App:
             self.quit()
 
     def pick_recording(self):
-        """Choose an existing audio file (default: the recordings folder) and transcribe it
+        """Choose an existing audio file (default: the output folder) and transcribe it
         with the mode, language and model currently selected in the window."""
-        start = self.rec_dir if self.rec_dir.is_dir() else self.rec_dir.parent
+        start = self.root_dir if self.root_dir.is_dir() else self.root_dir.parent
         chosen = filedialog.askopenfilename(parent=self.root, title="Choose a recording to transcribe",
                                             initialdir=str(start), filetypes=AUDIO_TYPES)
         if not chosen:
@@ -669,34 +677,24 @@ class App:
         self.status.set(f"Selected {path.name}")
         self.launch_transcription(path, name=path.stem)
 
-    def pick_dir(self, kind: str):
-        """Choose the folder for recordings (kind 'rec') or transcripts ('tx')."""
-        cur = {"rec": self.rec_dir, "tx": self.tx_dir, "log": self.log_dir}[kind]
+    def pick_dir(self):
+        """Choose the output folder (every recording gets its own subfolder in it)."""
+        cur = self.root_dir
         chosen = filedialog.askdirectory(
-            parent=self.root, mustexist=False, title="Choose the folder for " +
-            {"rec": "recordings", "tx": "transcripts", "log": "log files"}[kind],
+            parent=self.root, mustexist=False,
+            title="Choose the output folder (one subfolder per recording is created in it)",
             initialdir=str(cur if cur.is_dir() else cur.parent))
         if not chosen:
             return
-        path = Path(chosen)
-        if kind == "rec":
-            self.rec_dir = path
-            self.rec_dir_var.set(str(path))
-            self.save_setting("output_dir", str(path))
-        elif kind == "log":
-            self.log_dir = path
-            self.log_dir_var.set(str(path))
-            self.save_setting("log_dir", str(path))
-            self.update_log_btn()
-        else:
-            self.tx_dir = path
-            self.tx_dir_var.set(str(path))
-            self.save_setting("transcript_dir", str(path))
-            self.update_open_btn()
+        self.set_root(Path(chosen))
+        self.save_setting("output_root", str(self.root_dir))
+        self.update_open_btn()
+        self.update_log_btn()
 
     def last_transcript(self) -> Path | None:
-        """The newest transcript in the transcripts folder, or None."""
-        files = [f for f in self.tx_dir.glob("*.txt") if f.is_file()] if self.tx_dir.is_dir() else []
+        """The newest transcript in the meeting folders of the output folder, or None."""
+        files = [f for f in self.root_dir.glob("*/*.txt")
+                 if f.is_file() and not f.name.endswith(".log.txt")]
         return max(files, key=lambda f: f.stat().st_mtime, default=None)
 
     def update_open_btn(self):
@@ -716,8 +714,8 @@ class App:
 
     # ── Log file ────────────────────────────────────────────────────────────────
     def log_path_for(self, audio: Path) -> Path:
-        """<log folder>/<audio name without extension>.log.txt"""
-        return self.log_dir / f"{audio.stem}.log.txt"
+        """<meeting folder>/<audio name without extension>.log.txt"""
+        return self.meeting_dir(audio) / f"{audio.stem}.log.txt"
 
     def log(self, path: Path | None, text: str):
         """Append a timestamped entry (multi-line text is indented) to a log file."""
@@ -734,8 +732,7 @@ class App:
         self.log_btn.state(["!disabled"])
 
     def newest_log(self) -> Path | None:
-        d = self.log_dir
-        files = list(d.glob("*.log.txt")) if d.is_dir() else []
+        files = list(self.root_dir.glob("*/*.log.txt")) if self.root_dir.is_dir() else []
         return max(files, key=lambda f: f.stat().st_mtime, default=None)
 
     def update_log_btn(self):
@@ -757,7 +754,7 @@ class App:
         with_speakers = self.mode.get() == "speakers"
         cmd = rm.transcribe_command(path, name, self.lang.get() or None,
                                     self.model.get() or None, speakers=with_speakers,
-                                    output_dir=self.tx_dir)
+                                    output_dir=self.meeting_dir(path))
         # Use python.exe (not pythonw.exe): the scripts print their progress to stderr
         cmd[0] = str(Path(sys.executable).with_name("python.exe"))
         self.job_seq += 1
@@ -828,7 +825,7 @@ class App:
         speakers = self.mode.get() == "speakers"
         self.session = {
             "name": self.name or "meeting", "final": self.mp3_path,
-            "tx_dir": self.tx_dir, "combined": self.tx_dir / f"{self.mp3_path.stem}.txt",
+            "tx_dir": self.mp3_path.parent, "combined": self.mp3_path.parent / f"{self.mp3_path.stem}.txt",
             "parts": [], "failed": False, "recording_done": False, "merging": False,
             "speakers": speakers, "lang": self.lang.get() or None, "model": self.model.get() or None,
             "log": self.log_path_for(self.mp3_path),
@@ -1111,18 +1108,15 @@ def main() -> None:
     ap.add_argument("--format", choices=["mp3", "wav"], help="recording format")
     ap.add_argument("--chunk-minutes", type=int, choices=range(0, 61), metavar="0-60",
                     help="transcribe while recording, every N minutes (0 = off)")
-    ap.add_argument("--output-dir", type=Path, help="folder for recordings and logs")
-    ap.add_argument("--transcript-dir", type=Path, help="folder for transcripts")
-    ap.add_argument("--log-dir", type=Path, help="folder for the log files")
+    ap.add_argument("--output-dir", type=Path,
+                    help="the output folder; every recording gets its own subfolder in it")
     args = ap.parse_args()
     # Command-line values win over the saved settings for this run and are not saved.
     cli = {"name": args.name, "mic": args.mic, "system": args.system, "duck": args.duck,
            "separate_channels": args.separate_channels, "transcribe": args.transcribe,
            "mode": args.mode, "language": args.language, "model": args.model,
            "format": args.format, "chunk_minutes": args.chunk_minutes,
-           "output_dir": str(args.output_dir) if args.output_dir else None,
-           "transcript_dir": str(args.transcript_dir) if args.transcript_dir else None,
-           "log_dir": str(args.log_dir) if args.log_dir else None}
+           "output_root": str(args.output_dir) if args.output_dir else None}
 
     if not single_instance():
         ctypes.windll.user32.MessageBoxW(0, "Meeting Recorder is already running "

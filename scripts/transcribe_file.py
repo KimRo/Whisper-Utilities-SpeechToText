@@ -52,7 +52,7 @@ requirements_check.require("transcribe", tool="transcribe_file.py")  # clear mes
 from faster_whisper import WhisperModel  # noqa: E402 (after the checks above)
 
 # Repo-root "transcripts" folder (same location for all scripts)
-TRANSCRIPT_DIR = meeting_settings.DEFAULT_TRANSCRIPTS   # Documents\Meeting Recorder\Transcripts
+OUTPUT_ROOT = meeting_settings.output_root()   # one subfolder per transcription in it
 
 # ── Colours ─────────────────────────────────────────────────────────────────────
 if sys.platform == "win32":
@@ -163,11 +163,12 @@ def prompt_output(audio_path: Path) -> Path:
 
 def build_output_path(audio_path: Path, requested: Path | None,
                       output_dir: Path | None = None) -> Path:
-    """Write into the transcripts folder (or output_dir) as '<timestamp>_<original name>.txt'."""
-    folder = output_dir or TRANSCRIPT_DIR
-    folder.mkdir(parents=True, exist_ok=True)
+    """Write '<timestamp>_<name>.txt' into output_dir, or by default into its own subfolder
+    <output folder>/<timestamp>_<name>."""
     stem = requested.stem if requested else audio_path.stem
     ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    folder = output_dir or OUTPUT_ROOT / f"{ts}_{stem}"
+    folder.mkdir(parents=True, exist_ok=True)
     return folder / f"{ts}_{stem}.txt"
 
 
@@ -207,7 +208,7 @@ def main() -> None:
     parser.add_argument("--model", default=None,
                         help="Whisper model size (default: small)")
     parser.add_argument("--output-dir", type=Path, default=None,
-                        help="Folder to save the transcript in (default: the transcripts folder)")
+                        help="Folder to save the transcript in (default: a new subfolder of the output folder)")
     parser.add_argument("--cpu", action="store_true",
                         help="Force CPU inference")
     args = parser.parse_args()
