@@ -439,33 +439,53 @@ def record(sources: list[Source], mp3_path: Path, stop: threading.Event,
     return emitted / SAMPLE_RATE
 
 
-def merge_audio(parts: list[Path], dest: Path) -> float:
-    """Join the part files (same format, in order) into one file dest; returns seconds.
+class Merger:
+    """Joins part files, one after the other, into one growing recording.
 
-    The parts are decoded and re-encoded with the settings the recorder uses (the layout,
-    mono or stereo, is taken from the first part).
+    add(part) decodes a part and re-encodes it to the end of dest (same settings as the
+    recorder; mono or stereo is taken from the first part). The file is complete, and its
+    duration known, only after close().
     """
-    first = av.open(str(parts[0]))
-    dual = first.streams.audio[0].channels == 2
-    first.close()
-    writer = _Writer(dest, dual)
-    layout = "stereo" if dual else "mono"
-    total = 0
+
+    def __init__(self, dest: Path):
+        self.dest = dest
+        self.writer: _Writer | None = None
+        self.dual = False
+        self.total = 0                                  # samples written
+
+    def add(self, part: Path) -> None:
+        container = av.open(str(part))
+        try:
+            if self.writer is None:
+                self.dual = container.streams.audio[0].channels == 2
+                self.writer = _Writer(self.dest, self.dual)
+            rs = av.AudioResampler(format="s16", layout="stereo" if self.dual else "mono",
+                                   rate=SAMPLE_RATE)
+            for frame in container.decode(audio=0):
+                for out in rs.resample(frame):
+                    arr = out.to_ndarray().reshape(-1)
+                    self.writer.write(arr)
+                    self.total += arr.size // (2 if self.dual else 1)
+        finally:
+            container.close()
+
+    def close(self) -> float:
+        """Finish the file; returns its length in seconds."""
+        if self.writer is not None:
+            self.writer.close()
+            self.writer = None
+        return self.total / SAMPLE_RATE
+
+
+def merge_audio(parts: list[Path], dest: Path) -> float:
+    """Join the part files (same format, in order) into one file dest; returns seconds."""
+    merger = Merger(dest)
     try:
         for p in parts:
-            container = av.open(str(p))
-            try:
-                rs = av.AudioResampler(format="s16", layout=layout, rate=SAMPLE_RATE)
-                for frame in container.decode(audio=0):
-                    for out in rs.resample(frame):
-                        arr = out.to_ndarray().reshape(-1)
-                        writer.write(arr)
-                        total += arr.size // (2 if dual else 1)
-            finally:
-                container.close()
+            merger.add(p)
     finally:
-        writer.close()
-    return total / SAMPLE_RATE
+        seconds = merger.close()
+    return seconds
 
 
 # ── Main ────────────────────────────────────────────────────────────────────────

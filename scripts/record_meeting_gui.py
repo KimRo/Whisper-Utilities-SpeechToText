@@ -25,7 +25,7 @@ Everything shown in the Status box is also logged, with timestamps, to <recordin
 "Open log" (below the Status box) opens the log of the running transcription, else the newest log.
 The "Also transcribe while recording, every N min" field (0 = off) splits a long recording into part files
 that are transcribed in the background (queued when slower than real time) into one combined transcript,
-and merges the parts into one recording afterwards (see doc/record_meeting.md).
+and adds each part to one merged recording as soon as it is transcribed (see doc/record_meeting.md).
 "Open last transcription" opens the newest transcript in the transcripts folder; it is greyed
 out while a transcription is running in the background (or when there is no transcript yet).
 
@@ -43,6 +43,7 @@ Only record meetings when all participants know about and agree with it.
 from __future__ import annotations
 
 import argparse
+import collections
 import ctypes
 import os
 import queue
@@ -77,6 +78,7 @@ DEFAULT_MODEL = "medium"
 OFF = "Off (don't record this source)"
 ANSI = re.compile(r"\x1b\[[0-9;]*m")                     # colour codes in the scripts' output
 STAGES = ("Loading", "Transcribing", "Identifying", "Language")   # progress lines worth showing
+RECENT_LINES = 6                                                 # events shown in the Status box
 TX_COLORS = {"busy": "#555555", "ok": "#1a7f37", "fail": "#c62828"}
 STAMP = re.compile(r"^\[(\d+):(\d\d):(\d\d)\]", re.M)             # "[HH:MM:SS]" at a line start
 MIN_PART = 1.0                                                   # shorter parts are not transcribed
@@ -290,6 +292,13 @@ class App:
         status_frm = ttk.LabelFrame(frm, text="Status", style="Status.TLabelframe", padding=(8, 4))
         status_frm.grid(row=20, column=0, columnspan=3, pady=(14, 0), sticky="ew")
         ttk.Label(status_frm, textvariable=self.status, wraplength=345 + self.extra_px).pack(anchor="w", fill="x")
+        # Recent events: the last few entries of the log, so that nothing that is logged
+        # (part saved / transcribed / merged, ...) goes by unseen. Progress detail lines
+        # (loading the model, ...) are only shown in the live line below.
+        self.recent: "collections.deque[str]" = collections.deque(maxlen=RECENT_LINES)
+        self.recent_var = tk.StringVar(value="")
+        self.recent_label = ttk.Label(status_frm, textvariable=self.recent_var, foreground="#666666",
+                                      wraplength=345 + self.extra_px, justify="left")
         # Transcription progress/result: its own line so it never overwrites the recording status
         self.tx_events: "queue.Queue[tuple]" = queue.Queue()   # from the transcription threads
         self.jobs: dict[int, dict] = {}
@@ -728,8 +737,16 @@ class App:
         """<meeting folder>/<audio name without extension>.log.txt"""
         return self.meeting_dir(audio) / f"{audio.stem}.log.txt"
 
-    def log(self, path: Path | None, text: str):
-        """Append a timestamped entry (multi-line text is indented) to a log file."""
+    def log(self, path: Path | None, text: str, show: bool = True):
+        """Append a timestamped entry (multi-line text is indented) to a log file and show it in
+        the recent-events list of the Status box (show=False: progress detail, log only)."""
+        if show and text:
+            first = text.splitlines()[0]
+            self.recent.append(f"{time.strftime('%H:%M:%S')}  {first if len(first) <= 90 else first[:87] + '...'}")
+            self.recent_var.set("\n".join(self.recent))
+            if not self.recent_label.winfo_ismapped():
+                place = {"before": self.tx_label} if self.tx_label.winfo_manager() else {}
+                self.recent_label.pack(anchor="w", fill="x", pady=(6, 0), **place)   # keep it above the live line
         if path is None or not text:
             return
         stamp = time.strftime("%Y-%m-%d %H:%M:%S")
@@ -838,6 +855,7 @@ class App:
             "name": self.name or "meeting", "final": self.mp3_path,
             "tx_dir": self.mp3_path.parent, "combined": self.mp3_path.parent / f"{self.mp3_path.stem}.txt",
             "parts": [], "failed": False, "recording_done": False, "merging": False,
+            "merger": rm.Merger(self.mp3_path), "merge_error": None,
             "speakers": speakers, "lang": self.lang.get() or None, "model": self.model.get() or None,
             "log": self.log_path_for(self.mp3_path),
         }
@@ -863,8 +881,12 @@ class App:
             job = jobs.get()
             if job is None:
                 return
-            path, index, offset, duration = job
+            path, index, offset, duration, transcribe = job
             self.tx_events.put(("part_start", index))
+            if not transcribe:                      # too short to hold speech: only merge it
+                self.merge_part(sess, path, index)
+                self.tx_events.put(("part_done", index, True, "too short to transcribe"))
+                continue
             name = f"{sess['name']}_part{index:02d}"
             cmd = rm.transcribe_command(path, name, sess["lang"], sess["model"],
                                         speakers=sess["speakers"], output_dir=sess["tx_dir"])
@@ -889,7 +911,19 @@ class App:
                     f.write(f"{header}\n{body}\n\n")
             except OSError as e:
                 ok, detail = False, f"could not write {sess['combined'].name}: {e}"
+            self.merge_part(sess, path, index)      # transcription finished: add it to the recording
             self.tx_events.put(("part_done", index, ok, detail))
+
+    def merge_part(self, sess: dict, path: Path, index: int):
+        """Runner thread: append a part's audio to the merged recording (once, in order)."""
+        if sess["merge_error"]:
+            return                                  # an earlier part failed to merge: stop merging
+        try:
+            sess["merger"].add(path)
+            self.tx_events.put(("part_merged", index))
+        except Exception as e:  # noqa: BLE001 - report anything to the UI
+            sess["merge_error"] = str(e)
+            self.tx_events.put(("part_merge_failed", index, str(e)))
 
     def handle_part_event(self, kind: str, rest: tuple):
         sess = self.session
@@ -899,21 +933,28 @@ class App:
         if kind == "part":
             path, index, offset, duration = rest
             sess["parts"].append((path, duration))
+            self.part_pending += 1
             if duration < MIN_PART:
                 self.log(log, f"Part {index} ({duration:.1f} s) is too short to transcribe; "
                               f"it is only added to the merged recording")
-                return
-            self.part_pending += 1
-            self.log(log, f"Part {index} saved ({hms(offset)} - {hms(offset + duration)}); "
-                          f"{self.part_pending - 1} part(s) ahead in the queue")
-            self.part_q.put((path, index, offset, duration))
+            else:
+                self.log(log, f"Part {index} saved ({hms(offset)} - {hms(offset + duration)}); "
+                              f"{self.part_pending - 1} part(s) ahead in the queue")
+            self.part_q.put((path, index, offset, duration, duration >= MIN_PART))
+            return
         elif kind == "part_start":
             self.part_cur = {"index": rest[0], "stage": "Starting", "start": time.monotonic()}
             self.log(log, f"Transcribing part {rest[0]}")
         elif kind == "part_stage":
             if self.part_cur is not None:
                 self.part_cur["stage"] = rest[1]
-            self.log(log, f"Part {rest[0]}: {rest[1]}")
+            self.log(log, f"Part {rest[0]}: {rest[1]}", show=False)
+        elif kind == "part_merged":
+            self.log(log, f"Part {rest[0]} added to {sess['final'].name}")
+            return
+        elif kind == "part_merge_failed":
+            self.log(log, f"Part {rest[0]} could not be merged: {rest[1][:300]}")
+            return
         elif kind == "part_done":
             index, ok, detail = rest
             self.part_pending -= 1
@@ -921,6 +962,10 @@ class App:
             if not ok:
                 sess["failed"] = True
             self.log(log, f"Part {index} " + ("done" if ok else f"FAILED: {detail[:300]}"))
+            if not self.part_pending and not sess["recording_done"]:
+                # nothing left to do until the next part is recorded: don't keep showing the
+                # progress of the part that has just finished
+                self.set_tx("All parts so far are transcribed; recording continues ...", "ok")
             self.update_open_btn()
         elif kind == "merged":
             self.log(log, rest[0])
@@ -945,34 +990,31 @@ class App:
         if not sess["parts"]:
             self.session = None
             return
-        self.set_tx(f"Merging {len(sess['parts'])} part(s) into {sess['final'].name} ...")
+        self.set_tx(f"Finishing {sess['final'].name} ...")
         threading.Thread(target=self.merge_worker, args=(sess,), daemon=True).start()
 
     def merge_worker(self, sess: dict):
-        """Worker thread: join the part files into the final recording; remove the parts only
-        when that worked and every part was transcribed."""
+        """Worker thread: close the merged recording (the parts were added one by one as their
+        transcription finished) and remove the part files, but only when that worked and every
+        part was transcribed."""
         parts = [p for p, _ in sess["parts"]]
         final = sess["final"]
         try:
-            if len(parts) == 1:
-                parts[0].replace(final)             # nothing to join: just give it the final name
-                parts = []
-                detail = f"Recording saved as {final.name}"
-            else:
-                seconds = rm.merge_audio(parts, final)
-                expected = sum(d for _, d in sess["parts"])
-                if abs(seconds - expected) > 2.0 or final.stat().st_size == 0:
-                    raise RuntimeError(f"merged recording is {seconds:.1f} s, expected {expected:.1f} s")
-                detail = f"Recording merged into {final.name}"
-            if parts and not sess["failed"]:
+            seconds = sess["merger"].close()
+            expected = sum(d for _, d in sess["parts"])
+            if sess["merge_error"]:
+                raise RuntimeError(sess["merge_error"])
+            if abs(seconds - expected) > 2.0 or final.stat().st_size == 0:
+                raise RuntimeError(f"merged recording is {seconds:.1f} s, expected {expected:.1f} s")
+            detail = f"Recording merged into {final.name}"
+            if not sess["failed"]:
                 for p in parts:
                     p.unlink(missing_ok=True)
                 detail += " (part files removed)"
-            elif parts:
+            else:
                 detail += " (part files kept because a part failed)"
         except Exception as e:  # noqa: BLE001 - report anything to the UI
-            if len(parts) > 1 and final.exists():
-                final.unlink(missing_ok=True)       # the incomplete merge result
+            final.unlink(missing_ok=True)           # the incomplete merge result
             detail = f"Could not merge the parts ({e}); the part files are kept"
         self.tx_events.put(("merged", detail))
 
@@ -1021,7 +1063,7 @@ class App:
             job = self.jobs.get(jid)
             if kind == "stage" and job is not None:
                 job["stage"] = rest[0]
-                self.log(job["log"], rest[0])
+                self.log(job["log"], rest[0], show=False)
             elif kind == "done" and job is not None:
                 ok, detail = rest
                 del self.jobs[jid]
