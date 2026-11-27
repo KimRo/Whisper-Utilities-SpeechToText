@@ -22,6 +22,9 @@ The recording format (MP3 or WAV, both 16 kHz mono and sized for voice) is chose
 Everything shown in the Status box is also logged, with timestamps, to recordings/<recording name>.log.txt
 (next to the recording; transcribing an existing file appends to <that file's name>.log.txt).
 "Open log" (below the Status box) opens the log of the running transcription, else the newest log.
+The "Also transcribe while recording, every N min" field (0 = off) splits a long recording into part files
+that are transcribed in the background (queued when slower than real time) into one combined transcript,
+and merges the parts into one recording afterwards (see doc/record_meeting.md).
 "Open last transcription" opens the newest transcript in the transcripts folder; it is greyed
 out while a transcription is running in the background (or when there is no transcript yet).
 
@@ -44,7 +47,7 @@ import threading
 import time
 import tkinter as tk
 from pathlib import Path
-from tkinter import filedialog, ttk
+from tkinter import filedialog, messagebox, ttk
 
 try:
     from PIL import Image, ImageDraw
@@ -69,6 +72,8 @@ ANSI = re.compile(r"\x1b\[[0-9;]*m")                     # colour codes in the s
 STAGES = ("Loading", "Transcribing", "Identifying", "Language")   # progress lines worth showing
 TRANSCRIPT_DIR = rm.RECORDINGS_DIR.parent / "transcripts"   # where the transcribe scripts save
 TX_COLORS = {"busy": "#555555", "ok": "#1a7f37", "fail": "#c62828"}
+STAMP = re.compile(r"^\[(\d+):(\d\d):(\d\d)\]", re.M)             # "[HH:MM:SS]" at a line start
+MIN_PART = 1.0                                                   # shorter parts are not transcribed
 
 def check_requirements() -> tuple[dict, dict]:
     """Return (missing, available) for the features this window uses (see requirements_check)."""
@@ -112,6 +117,19 @@ def clean_name(text: str) -> str | None:
     return text[:80] or None
 
 
+def hms(seconds: float) -> str:
+    s = int(seconds)
+    return f"{s // 3600:02d}:{s % 3600 // 60:02d}:{s % 60:02d}"
+
+
+def shift_stamps(text: str, offset: float) -> str:
+    """Add offset seconds to every leading [HH:MM:SS] stamp (speaker transcripts of a later part)."""
+    def one(m):
+        t = int(m[1]) * 3600 + int(m[2]) * 60 + int(m[3]) + int(offset)
+        return f"[{hms(t)}]"
+    return STAMP.sub(one, text)
+
+
 def single_instance() -> bool:
     """True if this is the only running instance (named Windows mutex)."""
     global _mutex
@@ -132,6 +150,12 @@ class App:
         self.quit_after_stop = False
         self.closing = False
         self.icon = None
+        # Split recording (see start): a session while parts are being recorded/transcribed/merged
+        self.session: dict | None = None
+        self.part_q: "queue.Queue" = queue.Queue()      # parts waiting for transcription
+        self.part_pending = 0                            # parts queued or being transcribed
+        self.part_cur: dict | None = None                # the part being transcribed right now
+        self.chunk_seconds = 0
 
         root.title("Meeting Recorder")
         root.resizable(False, False)
@@ -218,19 +242,28 @@ class App:
         self.format_box = ttk.Combobox(frm, textvariable=self.format, values=list(FORMATS),
                                        width=34, state="readonly")
         self.format_box.grid(row=13, column=1, columnspan=2, sticky="w", padx=(8, 0))
+        # Split recording: every N minutes a new part file starts and the finished part is
+        # transcribed in the background (queued when the transcription is slower than that)
+        self.chunk_var = tk.StringVar(value="5")
+        chunk_frm = ttk.Frame(frm)
+        chunk_frm.grid(row=14, column=0, columnspan=3, sticky="w", pady=(4, 0))
+        ttk.Label(chunk_frm, text="Also transcribe while recording, every").pack(side="left")
+        self.chunk_spin = ttk.Spinbox(chunk_frm, from_=0, to=60, width=4, textvariable=self.chunk_var)
+        self.chunk_spin.pack(side="left", padx=(6, 0))
+        ttk.Label(chunk_frm, text="min (0 = off)").pack(side="left", padx=(4, 0))
 
         btns = ttk.Frame(frm)
-        btns.grid(row=14, column=0, columnspan=3, pady=(12, 0), sticky="ew")
+        btns.grid(row=15, column=0, columnspan=3, pady=(12, 0), sticky="ew")
         self.pick_btn = ttk.Button(frm, text="Transcribe a recording…", command=self.pick_recording)
-        self.pick_btn.grid(row=15, column=0, columnspan=3, pady=(6, 0), sticky="ew")
+        self.pick_btn.grid(row=16, column=0, columnspan=3, pady=(6, 0), sticky="ew")
         self.open_btn = ttk.Button(frm, text="Open last transcription", command=self.open_last)
-        self.open_btn.grid(row=16, column=0, columnspan=3, pady=(6, 0), sticky="ew")
+        self.open_btn.grid(row=17, column=0, columnspan=3, pady=(6, 0), sticky="ew")
 
         # Feedback ("Saved ...", errors, warnings) always at the very bottom, clearly headed
         style = ttk.Style(root)
         style.configure("Status.TLabelframe.Label", font=("Segoe UI", 10, "bold"))
         status_frm = ttk.LabelFrame(frm, text="Status", style="Status.TLabelframe", padding=(8, 4))
-        status_frm.grid(row=17, column=0, columnspan=3, pady=(14, 0), sticky="ew")
+        status_frm.grid(row=18, column=0, columnspan=3, pady=(14, 0), sticky="ew")
         ttk.Label(status_frm, textvariable=self.status, wraplength=345).pack(anchor="w", fill="x")
         # Transcription progress/result: its own line so it never overwrites the recording status
         self.tx_events: "queue.Queue[tuple]" = queue.Queue()   # from the transcription threads
@@ -239,7 +272,7 @@ class App:
         self.tx_status = tk.StringVar(value="")
         self.tx_label = ttk.Label(status_frm, textvariable=self.tx_status, wraplength=345)
         self.log_btn = ttk.Button(frm, text="Open log", command=self.open_log)
-        self.log_btn.grid(row=18, column=0, columnspan=3, pady=(6, 0), sticky="ew")
+        self.log_btn.grid(row=19, column=0, columnspan=3, pady=(6, 0), sticky="ew")
         self.btn = ttk.Button(btns, text="● Start recording", command=self.toggle)
         self.btn.pack(side="left", expand=True, fill="x")
         self.tray_btn = ttk.Button(btns, text="Minimize to tray", command=self.to_tray)
@@ -358,6 +391,7 @@ class App:
                 w.state(["disabled"])
             for box in (self.lang_box, self.model_box):
                 box.config(state="disabled")
+            self.chunk_spin.config(state="disabled")
         elif not can["speakers"]:
             self.mode.set("normal")
             self.radio_speakers.state(["disabled"])
@@ -393,6 +427,7 @@ class App:
         self.sys_box.config(state=state)
         self.refresh_btn.state(["!disabled"] if enabled else ["disabled"])
         self.format_box.config(state="readonly" if enabled and self.can["record"] else "disabled")
+        self.chunk_spin.config(state="normal" if enabled and self.can["transcribe"] else "disabled")
         self.duck_cb.state(["!disabled"] if enabled else ["disabled"])
         if enabled:
             self.update_channel_option()   # enabled only when both sources are on
@@ -432,6 +467,7 @@ class App:
         self.cur_log = self.log_path_for(self.mp3_path)
         self.duck_enabled = self.duck.get()   # read here: Tk variables belong to the UI thread
         self.stereo_enabled = self.stereo.get()
+        self.start_session()
         self.stop_evt.clear()
         self.result = None
         self.recording = True
@@ -439,7 +475,9 @@ class App:
         self.btn.config(text="■ Stop recording")
         self.set_controls(False)
         self.name_entry.state(["disabled"])
-        self.status.set(f"Recording to {self.mp3_path.name}")
+        self.status.set(f"Recording to {self.mp3_path.name}" if not self.session else
+                        f"Recording to {self.mp3_path.stem} in parts of {self.chunk_seconds // 60} min "
+                        f"(part files are transcribed in the background)")
         self.thread = threading.Thread(target=self.worker, args=(sources,), daemon=True)
         self.thread.start()
         self.refresh_icon()
@@ -454,7 +492,9 @@ class App:
                     self.peaks[s.label] = s.peak
 
             rm.record(sources, self.mp3_path, self.stop_evt, on_tick=on_tick,
-                      duck=self.duck_enabled, stereo=self.stereo_enabled)
+                      duck=self.duck_enabled, stereo=self.stereo_enabled,
+                      chunk_seconds=self.chunk_seconds,
+                      on_chunk=self.on_chunk if self.chunk_seconds else None)
             silent = [s.label for s in sources if s.max_peak < 0.001]
         except Exception as e:  # noqa: BLE001 - report anything to the UI
             err = str(e)
@@ -478,7 +518,20 @@ class App:
         self.set_controls(True)
         self.name_entry.state(["!disabled"])
         path = self.mp3_path
-        if res["error"]:
+        sess = self.session
+        if sess is not None:
+            sess["recording_done"] = True
+            if res["error"]:
+                self.status.set(f"Error: {res['error']}")
+            elif not sess["parts"]:
+                self.status.set("No audio was saved.")
+            else:
+                msg = f"Recording stopped: {len(sess['parts'])} part(s) of {path.stem}"
+                if res["silent"]:
+                    msg += f" — warning: silent source(s): {', '.join(res['silent'])}"
+                self.status.set(msg)
+            self.maybe_finalize()
+        elif res["error"]:
             self.status.set(f"Error: {res['error']}")
         elif not path.exists() or path.stat().st_size == 0:
             self.status.set("No audio was saved.")
@@ -586,6 +639,13 @@ class App:
 
     def run_transcription(self, jid: int, cmd: list):
         """Worker thread: run the script without a console window and report back via tx_events."""
+        ok, detail = self.run_script(cmd, lambda line: self.tx_events.put(("stage", jid, line)))
+        self.tx_events.put(("done", jid, ok, detail))
+
+    def run_script(self, cmd: list, on_stage) -> tuple[bool, str]:
+        """Run a transcribe script (no console window), call on_stage(line) for its progress lines
+        and return (ok, detail): detail is the saved transcript's file name, a short message such
+        as "no speech was detected", or the error."""
         env = dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONUTF8="1")
         try:
             proc = subprocess.Popen(
@@ -593,8 +653,7 @@ class App:
                 text=True, encoding="utf-8", errors="replace", env=env,
                 creationflags=subprocess.CREATE_NO_WINDOW)
         except OSError as e:
-            self.tx_events.put(("done", jid, False, f"could not start the transcription: {e}"))
-            return
+            return False, f"could not start the transcription: {e}"
         # The transcript itself goes to stdout and to the file; drain it so the pipe never fills.
         threading.Thread(target=lambda: [None for _ in proc.stdout], daemon=True).start()
         saved, tail = None, []
@@ -603,7 +662,7 @@ class App:
             if not line:
                 continue
             if line.startswith(STAGES):
-                self.tx_events.put(("stage", jid, line))
+                on_stage(line)
             m = re.match(r"Saved\s*:\s*(.+)$", line)
             if m:
                 saved = m.group(1).strip()
@@ -611,14 +670,169 @@ class App:
             tail = tail[-12:]
         code = proc.wait()
         if code == 0 and saved:
-            self.tx_events.put(("done", jid, True, Path(saved).name))
-        elif code == 0 and any("No speech detected" in l for l in tail):
-            self.tx_events.put(("done", jid, True, "no speech was detected"))
-        elif code == 0:
-            self.tx_events.put(("done", jid, False, "the script finished without saving a transcript"))
-        else:
-            errors = [l for l in tail if l.startswith("Error") or "Error:" in l]
-            self.tx_events.put(("done", jid, False, (errors or tail or [f"exit code {code}"])[-1]))
+            return True, Path(saved).name
+        if code == 0 and any("No speech detected" in l for l in tail):
+            return True, "no speech was detected"
+        if code == 0:
+            return False, "the script finished without saving a transcript"
+        errors = [l for l in tail if l.startswith("Error") or "Error:" in l]
+        return False, (errors or tail or [f"exit code {code}"])[-1]
+
+    # ── Split recording: parts, queue, combined transcript, merge ───────────────
+    def start_session(self):
+        """Prepare split recording (called from start() on the UI thread; Tk variables are read
+        here). Active only when the split time is > 0 and transcription is available."""
+        self.session = None
+        self.chunk_seconds = 0
+        try:
+            minutes = int(self.chunk_var.get())
+        except ValueError:
+            minutes = 0
+        if minutes <= 0 or not self.can["transcribe"]:
+            return
+        self.chunk_seconds = min(minutes, 60) * 60
+        speakers = self.mode.get() == "speakers"
+        self.session = {
+            "name": self.name or "meeting", "final": self.mp3_path,
+            "combined": TRANSCRIPT_DIR / f"{self.mp3_path.stem}.txt",
+            "parts": [], "failed": False, "recording_done": False, "merging": False,
+            "speakers": speakers, "lang": self.lang.get() or None, "model": self.model.get() or None,
+            "log": self.log_path_for(self.mp3_path),
+        }
+        self.part_q = queue.Queue()
+        self.part_pending = 0
+        self.part_cur = None
+        self.log(self.session["log"],
+                 f"Split recording every {minutes} min; transcribing each part in the background "
+                 f"({'with speakers' if speakers else 'normal'}, language "
+                 f"{self.session['lang'] or 'auto'}, model {self.session['model'] or 'default'}); "
+                 f"combined transcript: {self.session['combined'].name}")
+        threading.Thread(target=self.part_runner, args=(self.session, self.part_q),
+                         daemon=True).start()
+
+    def on_chunk(self, path: Path, index: int, offset: float, duration: float):
+        """Recorder thread: a part file is finished."""
+        self.tx_events.put(("part", path, index, offset, duration))
+
+    def part_runner(self, sess: dict, jobs: "queue.Queue"):
+        """Worker thread: transcribe the queued parts one after the other and append each
+        result to the combined transcript."""
+        while True:
+            job = jobs.get()
+            if job is None:
+                return
+            path, index, offset, duration = job
+            self.tx_events.put(("part_start", index))
+            name = f"{sess['name']}_part{index:02d}"
+            cmd = rm.transcribe_command(path, name, sess["lang"], sess["model"],
+                                        speakers=sess["speakers"])
+            cmd[0] = str(Path(sys.executable).with_name("python.exe"))
+            ok, detail = self.run_script(
+                cmd, lambda line, i=index: self.tx_events.put(("part_stage", i, line)))
+            text = None
+            if ok and detail.endswith(".txt"):
+                tfile = TRANSCRIPT_DIR / detail
+                try:
+                    text = tfile.read_text(encoding="utf-8").strip()
+                    tfile.unlink()                  # its text now lives in the combined file
+                except OSError as e:
+                    ok, detail = False, f"could not read {detail}: {e}"
+            if ok and text and sess["speakers"]:
+                text = shift_stamps(text, offset)
+            header = f"--- Part {index} ({hms(offset)} - {hms(offset + duration)}) ---"
+            body = text if text else ("(no speech)" if ok else f"(transcription failed: {detail})")
+            try:
+                sess["combined"].parent.mkdir(parents=True, exist_ok=True)
+                with open(sess["combined"], "a", encoding="utf-8") as f:
+                    f.write(f"{header}\n{body}\n\n")
+            except OSError as e:
+                ok, detail = False, f"could not write {sess['combined'].name}: {e}"
+            self.tx_events.put(("part_done", index, ok, detail))
+
+    def handle_part_event(self, kind: str, rest: tuple):
+        sess = self.session
+        if sess is None:
+            return
+        log = sess["log"]
+        if kind == "part":
+            path, index, offset, duration = rest
+            sess["parts"].append((path, duration))
+            if duration < MIN_PART:
+                self.log(log, f"Part {index} ({duration:.1f} s) is too short to transcribe; "
+                              f"it is only added to the merged recording")
+                return
+            self.part_pending += 1
+            self.log(log, f"Part {index} saved ({hms(offset)} - {hms(offset + duration)}); "
+                          f"{self.part_pending - 1} part(s) ahead in the queue")
+            self.part_q.put((path, index, offset, duration))
+        elif kind == "part_start":
+            self.part_cur = {"index": rest[0], "stage": "Starting", "start": time.monotonic()}
+            self.log(log, f"Transcribing part {rest[0]}")
+        elif kind == "part_stage":
+            if self.part_cur is not None:
+                self.part_cur["stage"] = rest[1]
+            self.log(log, f"Part {rest[0]}: {rest[1]}")
+        elif kind == "part_done":
+            index, ok, detail = rest
+            self.part_pending -= 1
+            self.part_cur = None
+            if not ok:
+                sess["failed"] = True
+            self.log(log, f"Part {index} " + ("done" if ok else f"FAILED: {detail[:300]}"))
+            self.update_open_btn()
+        elif kind == "merged":
+            self.log(log, rest[0])
+            self.session = None
+            ok = not sess["failed"]
+            self.set_tx(f"Transcription finished: {sess['combined'].name}\n{rest[0]}" if ok else
+                        f"Some parts failed, see {sess['combined'].name}.\n{rest[0]}",
+                        "ok" if ok else "fail")
+            self.update_open_btn()
+            self.update_log_btn()
+            self.show()
+            return
+        self.maybe_finalize()
+
+    def maybe_finalize(self):
+        """Once recording has stopped and every part is transcribed: merge the parts."""
+        sess = self.session
+        if sess is None or not sess["recording_done"] or self.part_pending or sess["merging"]:
+            return
+        sess["merging"] = True
+        self.part_q.put(None)                       # ends the runner thread
+        if not sess["parts"]:
+            self.session = None
+            return
+        self.set_tx(f"Merging {len(sess['parts'])} part(s) into {sess['final'].name} ...")
+        threading.Thread(target=self.merge_worker, args=(sess,), daemon=True).start()
+
+    def merge_worker(self, sess: dict):
+        """Worker thread: join the part files into the final recording; remove the parts only
+        when that worked and every part was transcribed."""
+        parts = [p for p, _ in sess["parts"]]
+        final = sess["final"]
+        try:
+            if len(parts) == 1:
+                parts[0].replace(final)             # nothing to join: just give it the final name
+                parts = []
+                detail = f"Recording saved as {final.name}"
+            else:
+                seconds = rm.merge_audio(parts, final)
+                expected = sum(d for _, d in sess["parts"])
+                if abs(seconds - expected) > 2.0 or final.stat().st_size == 0:
+                    raise RuntimeError(f"merged recording is {seconds:.1f} s, expected {expected:.1f} s")
+                detail = f"Recording merged into {final.name}"
+            if parts and not sess["failed"]:
+                for p in parts:
+                    p.unlink(missing_ok=True)
+                detail += " (part files removed)"
+            elif parts:
+                detail += " (part files kept because a part failed)"
+        except Exception as e:  # noqa: BLE001 - report anything to the UI
+            if len(parts) > 1 and final.exists():
+                final.unlink(missing_ok=True)       # the incomplete merge result
+            detail = f"Could not merge the parts ({e}); the part files are kept"
+        self.tx_events.put(("merged", detail))
 
     def set_tx(self, text: str, kind: str = "busy"):
         """Show (or hide, when empty) the transcription line in the Status box."""
@@ -630,7 +844,19 @@ class App:
         if self.tx_status.get() != text:
             self.tx_status.set(text)
 
+    def update_part_progress(self):
+        cur = self.part_cur
+        m, s = divmod(int(time.monotonic() - cur["start"]), 60)
+        text = f"Transcribing part {cur['index']}: {cur['stage']} [{m:02d}:{s:02d}]"
+        waiting = self.part_pending - 1
+        if waiting > 0:
+            text += f"\n{waiting} more part(s) waiting in the queue"
+        self.set_tx(text)
+
     def update_tx_progress(self):
+        if self.session is not None and self.part_cur is not None:
+            self.update_part_progress()
+            return
         if not self.jobs:
             return
         if len(self.jobs) == 1:
@@ -647,6 +873,9 @@ class App:
                 kind, jid, *rest = self.tx_events.get_nowait()
             except queue.Empty:
                 break
+            if kind.startswith("part") or kind == "merged":
+                self.handle_part_event(kind, (jid, *rest))
+                continue
             job = self.jobs.get(jid)
             if kind == "stage" and job is not None:
                 job["stage"] = rest[0]
@@ -706,6 +935,14 @@ class App:
             self.request_quit()
 
     def request_quit(self):
+        sess = self.session
+        if sess is not None and (self.recording or self.part_pending or sess["merging"]) \
+                and not messagebox.askyesno(
+                    "Meeting Recorder",
+                    "Parts of this recording are still being recorded, transcribed or merged.\n"
+                    "If you quit now the rest is not transcribed (the part files stay in the "
+                    "recordings folder).\n\nQuit anyway?", parent=self.root):
+            return
         if self.recording:
             self.quit_after_stop = True
             self.stop()

@@ -301,8 +301,44 @@ def transcribe_command(mp3_path: Path, name: str | None, language: str | None = 
     return cmd
 
 
+class _Writer:
+    """One MP3 or WAV file (chosen by the suffix of path) that audio is streamed into."""
+
+    def __init__(self, path: Path, dual: bool):
+        self.dual = dual
+        self.layout = "stereo" if dual else "mono"
+        self.out = av.open(str(path), "w")
+        if path.suffix.lower() == ".wav":
+            self.stream = self.out.add_stream("pcm_s16le", rate=SAMPLE_RATE)   # 16-bit PCM, no compression
+        else:
+            self.stream = self.out.add_stream("libmp3lame", rate=SAMPLE_RATE)
+            self.stream.bit_rate = STEREO_BITRATE if dual else MP3_BITRATE
+        self.stream.layout = self.layout
+
+    def write(self, samples: np.ndarray) -> None:
+        # mono: shape (n,); stereo: shape (n, 2) or flat, written interleaved as L R L R ...
+        frame = av.AudioFrame.from_ndarray(samples.reshape(1, -1), format="s16",
+                                           layout=self.layout)
+        frame.sample_rate = SAMPLE_RATE
+        for pkt in self.stream.encode(frame):
+            self.out.mux(pkt)
+
+    def close(self) -> None:
+        try:
+            for pkt in self.stream.encode(None):
+                self.out.mux(pkt)
+        finally:
+            self.out.close()
+
+
+def part_path(base: Path, index: int) -> Path:
+    """<base name>_part01.<ext>, _part02, ... : the files a split recording is written to."""
+    return base.with_name(f"{base.stem}_part{index:02d}{base.suffix}")
+
+
 def record(sources: list[Source], mp3_path: Path, stop: threading.Event,
-           on_tick=None, duck: bool = False, stereo: bool = False) -> float:
+           on_tick=None, duck: bool = False, stereo: bool = False,
+           chunk_seconds: float = 0, on_chunk=None) -> float:
     """Mix all sources and stream them into an MP3 or WAV file (chosen by the suffix of
     mp3_path) until stop is set. Returns seconds.
 
@@ -311,26 +347,43 @@ def record(sources: list[Source], mp3_path: Path, stop: threading.Event,
           only has an effect when both a "mic" and a "sys" source are recording.
     stereo: keep the sources apart (microphone left, system audio right) instead of mixing
           them to mono; only has an effect when both a "mic" and a "sys" source are recording.
+    chunk_seconds: when > 0 the recording continues without a gap but is written to a new file
+          every chunk_seconds (part_path(mp3_path, 1), 2, ...) instead of to mp3_path itself.
+    on_chunk(path, index, offset_seconds, duration_seconds) is called (from this thread) each
+          time a part file is finished and closed, including the last one.
     """
     labels = {s.label for s in sources}
     ducker = Ducker() if duck and labels >= {"mic", "sys"} else None
     dual = stereo and labels >= {"mic", "sys"}
-    out = av.open(str(mp3_path), "w")
-    if mp3_path.suffix.lower() == ".wav":
-        stream = out.add_stream("pcm_s16le", rate=SAMPLE_RATE)   # 16 kHz 16-bit PCM, no compression
-        stream.layout = "stereo" if dual else "mono"
-    else:
-        stream = out.add_stream("libmp3lame", rate=SAMPLE_RATE)
-        stream.layout = "stereo" if dual else "mono"
-        stream.bit_rate = STEREO_BITRATE if dual else MP3_BITRATE
+    chunk_samples = int(chunk_seconds * SAMPLE_RATE) if chunk_seconds and chunk_seconds > 0 else 0
 
-    def write(samples: np.ndarray) -> None:
-        # mono: shape (n,); stereo: shape (n, 2), written interleaved as L R L R ...
-        frame = av.AudioFrame.from_ndarray(samples.reshape(1, -1), format="s16",
-                                           layout="stereo" if dual else "mono")
-        frame.sample_rate = SAMPLE_RATE
-        for pkt in stream.encode(frame):
-            out.mux(pkt)
+    part = 1
+    part_offset = 0          # samples recorded before the current part
+    part_len = 0             # samples in the current part
+    cur_path = part_path(mp3_path, 1) if chunk_samples else mp3_path
+    writer = _Writer(cur_path, dual)
+
+    def finish_part() -> None:
+        writer.close()
+        if on_chunk is not None:
+            on_chunk(cur_path, part, part_offset / SAMPLE_RATE, part_len / SAMPLE_RATE)
+
+    def write(block: np.ndarray) -> None:
+        nonlocal writer, part, part_offset, part_len, cur_path
+        pos = 0
+        while pos < len(block):
+            if chunk_samples and part_len >= chunk_samples:      # lazily: only when more audio comes
+                finish_part()
+                part += 1
+                part_offset += part_len
+                part_len = 0
+                cur_path = part_path(mp3_path, part)
+                writer = _Writer(cur_path, dual)
+            room = (chunk_samples - part_len) if chunk_samples else len(block) - pos
+            piece = block[pos:pos + room]
+            writer.write(piece)
+            part_len += len(piece)
+            pos += len(piece)
 
     start = time.monotonic()
     emitted = 0
@@ -367,11 +420,41 @@ def record(sources: list[Source], mp3_path: Path, stop: threading.Event,
                 break
             time.sleep(TICK)
     finally:
-        for pkt in stream.encode(None):
-            out.mux(pkt)
-        out.close()
+        if chunk_samples:
+            finish_part()
+        else:
+            writer.close()
     info("")
     return emitted / SAMPLE_RATE
+
+
+def merge_audio(parts: list[Path], dest: Path) -> float:
+    """Join the part files (same format, in order) into one file dest; returns seconds.
+
+    The parts are decoded and re-encoded with the settings the recorder uses (the layout,
+    mono or stereo, is taken from the first part).
+    """
+    first = av.open(str(parts[0]))
+    dual = first.streams.audio[0].channels == 2
+    first.close()
+    writer = _Writer(dest, dual)
+    layout = "stereo" if dual else "mono"
+    total = 0
+    try:
+        for p in parts:
+            container = av.open(str(p))
+            try:
+                rs = av.AudioResampler(format="s16", layout=layout, rate=SAMPLE_RATE)
+                for frame in container.decode(audio=0):
+                    for out in rs.resample(frame):
+                        arr = out.to_ndarray().reshape(-1)
+                        writer.write(arr)
+                        total += arr.size // (2 if dual else 1)
+            finally:
+                container.close()
+    finally:
+        writer.close()
+    return total / SAMPLE_RATE
 
 
 # ── Main ────────────────────────────────────────────────────────────────────────
