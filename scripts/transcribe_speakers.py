@@ -227,12 +227,14 @@ def parse_names(raw: str | None) -> list[str] | None:
     return names or None
 
 
-def build_output_path(audio_path: Path, requested: Path | None) -> Path:
-    """Always write into the transcripts folder as '<timestamp>_<original name>.txt'."""
-    TRANSCRIPT_DIR.mkdir(parents=True, exist_ok=True)
+def build_output_path(audio_path: Path, requested: Path | None,
+                      output_dir: Path | None = None) -> Path:
+    """Write into the transcripts folder (or output_dir) as '<timestamp>_<original name>.txt'."""
+    folder = output_dir or TRANSCRIPT_DIR
+    folder.mkdir(parents=True, exist_ok=True)
     stem = requested.stem if requested else audio_path.stem
     ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    return TRANSCRIPT_DIR / f"{ts}_{stem}.txt"
+    return folder / f"{ts}_{stem}.txt"
 
 
 # ── Whisper ──────────────────────────────────────────────────────────────────────
@@ -527,6 +529,8 @@ def main() -> None:
                         help="Output base name (default: audio stem). The file is always saved in "
                              "the transcripts folder as <timestamp>_<name>.txt")
     parser.add_argument("--model", default=None, help=f"Whisper model size (default: {DEFAULT_MODEL})")
+    parser.add_argument("--output-dir", type=Path, default=None,
+                        help="Folder to save the transcript in (default: the transcripts folder)")
     parser.add_argument("--cpu", action="store_true", help="Force CPU inference")
     parser.add_argument("--speakers", type=int, default=None, help="Exact number of speakers")
     parser.add_argument("--min-speakers", type=int, default=None, help="Minimum number of speakers")
@@ -580,7 +584,7 @@ def main() -> None:
         if lang_code is None:
             fail(f"unknown language '{lang_input}'.")
         model_name = args.model or DEFAULT_MODEL
-        output_path = build_output_path(audio_path, args.output)
+        output_path = build_output_path(audio_path, args.output, args.output_dir)
         force_cpu = args.cpu
         num_speakers, min_speakers, max_speakers = args.speakers, args.min_speakers, args.max_speakers
         names = parse_names(args.names)

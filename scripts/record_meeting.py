@@ -31,6 +31,9 @@ Options:
                       Stereo MP3: microphone on the left channel, system audio on the right
                       (instead of mixing both to mono). Lets transcribe_speakers.py label
                       your own voice as "You". Needs both a microphone and system audio.
+    --output-dir DIR  Folder for the recording (default: the recordings folder)
+    --transcript-dir DIR
+                      Folder for the transcript (default: the transcripts folder)
     --list-devices    Show available devices and exit
     --transcribe      ask | yes | no (default: ask) — run transcribe_file.py afterwards
     -l, --language    Passed to transcribe_file.py
@@ -287,7 +290,7 @@ def open_sources(pa, mic: int | None = None, loopback: int | None = None,
 
 def transcribe_command(mp3_path: Path, name: str | None, language: str | None = None,
                        model: str | None = None, cpu: bool = False,
-                       speakers: bool = False) -> list[str]:
+                       speakers: bool = False, output_dir: Path | None = None) -> list[str]:
     """Command that transcribes the recording; speakers=True labels who says what."""
     script = "transcribe_speakers.py" if speakers else "transcribe_file.py"
     cmd = [sys.executable, str(SCRIPT_DIR / script), str(mp3_path),
@@ -298,6 +301,8 @@ def transcribe_command(mp3_path: Path, name: str | None, language: str | None = 
         cmd += ["--model", model]
     if cpu:
         cmd += ["--cpu"]
+    if output_dir:
+        cmd += ["--output-dir", str(output_dir)]
     return cmd
 
 
@@ -458,11 +463,12 @@ def merge_audio(parts: list[Path], dest: Path) -> float:
 
 
 # ── Main ────────────────────────────────────────────────────────────────────────
-def build_name(requested: str | None, ext: str = "mp3") -> Path:
-    RECORDINGS_DIR.mkdir(parents=True, exist_ok=True)
+def build_name(requested: str | None, ext: str = "mp3", folder: Path | None = None) -> Path:
+    folder = folder or RECORDINGS_DIR
+    folder.mkdir(parents=True, exist_ok=True)
     name = Path(requested).stem if requested else "meeting"
     ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    return RECORDINGS_DIR / f"{ts}_{name}.{ext}"
+    return folder / f"{ts}_{name}.{ext}"
 
 
 def ask_yes(prompt: str) -> bool:
@@ -475,6 +481,9 @@ def main() -> None:
     ap = argparse.ArgumentParser(description="Record microphone + system audio to MP3 or WAV")
     ap.add_argument("-o", "--output")
     ap.add_argument("--format", choices=["mp3", "wav"], default="mp3")
+    ap.add_argument("--output-dir", type=Path, help="folder for the recording (default: recordings)")
+    ap.add_argument("--transcript-dir", type=Path,
+                    help="folder for the transcript (default: transcripts)")
     ap.add_argument("--mic", type=int)
     ap.add_argument("--loopback", type=int)
     ap.add_argument("--no-mic", action="store_true")
@@ -516,7 +525,7 @@ def main() -> None:
     for s in sources:
         info(f"{_DIM}{'Microphone' if s.label == 'mic' else 'System    '} : {s.dev['name']}{_R}")
 
-    mp3_path = build_name(args.output, args.format)
+    mp3_path = build_name(args.output, args.format, args.output_dir)
     info(f"\n{_B}{_WH}Recording to{_R} {mp3_path}")
     info(f"{_DIM}Press Enter (or Ctrl+C) to stop.{_R}\n")
 
@@ -557,7 +566,8 @@ def main() -> None:
         args.transcribe == "ask" and ask_yes("Transcribe now?"))
     if do_transcribe:
         sys.exit(subprocess.call(
-            transcribe_command(mp3_path, args.output, args.language, args.model, args.cpu)))
+            transcribe_command(mp3_path, args.output, args.language, args.model, args.cpu,
+                               output_dir=args.transcript_dir)))
 
 
 if __name__ == "__main__":

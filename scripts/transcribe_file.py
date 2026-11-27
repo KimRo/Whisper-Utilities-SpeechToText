@@ -160,12 +160,14 @@ def prompt_output(audio_path: Path) -> Path:
     return build_output_path(audio_path, Path(raw) if raw else None)
 
 
-def build_output_path(audio_path: Path, requested: Path | None) -> Path:
-    """Always write into the transcripts folder as '<timestamp>_<original name>.txt'."""
-    TRANSCRIPT_DIR.mkdir(parents=True, exist_ok=True)
+def build_output_path(audio_path: Path, requested: Path | None,
+                      output_dir: Path | None = None) -> Path:
+    """Write into the transcripts folder (or output_dir) as '<timestamp>_<original name>.txt'."""
+    folder = output_dir or TRANSCRIPT_DIR
+    folder.mkdir(parents=True, exist_ok=True)
     stem = requested.stem if requested else audio_path.stem
     ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    return TRANSCRIPT_DIR / f"{ts}_{stem}.txt"
+    return folder / f"{ts}_{stem}.txt"
 
 
 # ── Core ────────────────────────────────────────────────────────────────────────
@@ -203,6 +205,8 @@ def main() -> None:
                              "the transcripts folder as <timestamp>_<name>.txt")
     parser.add_argument("--model", default=None,
                         help="Whisper model size (default: small)")
+    parser.add_argument("--output-dir", type=Path, default=None,
+                        help="Folder to save the transcript in (default: the transcripts folder)")
     parser.add_argument("--cpu", action="store_true",
                         help="Force CPU inference")
     args = parser.parse_args()
@@ -233,7 +237,7 @@ def main() -> None:
             sys.exit(1)
 
         model_name  = args.model or "small"
-        output_path = build_output_path(audio_path, args.output)
+        output_path = build_output_path(audio_path, args.output, args.output_dir)
         force_cpu   = args.cpu
 
     model = load_model(model_name, force_cpu)

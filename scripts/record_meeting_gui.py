@@ -156,6 +156,8 @@ class App:
         self.part_pending = 0                            # parts queued or being transcribed
         self.part_cur: dict | None = None                # the part being transcribed right now
         self.chunk_seconds = 0
+        self.rec_dir = rm.RECORDINGS_DIR                # where recordings and logs are saved
+        self.tx_dir = TRANSCRIPT_DIR                    # where transcripts are saved
 
         root.title("Meeting Recorder")
         root.resizable(False, False)
@@ -252,18 +254,30 @@ class App:
         self.chunk_spin.pack(side="left", padx=(6, 0))
         ttk.Label(chunk_frm, text="min (0 = off)").pack(side="left", padx=(4, 0))
 
+        self.rec_dir_var = tk.StringVar(value=str(self.rec_dir))
+        self.tx_dir_var = tk.StringVar(value=str(self.tx_dir))
+        self.dir_btns = []
+        for r, (text, var, kind) in enumerate((("Audio folder", self.rec_dir_var, "rec"),
+                                               ("Transcript folder", self.tx_dir_var, "tx")), 15):
+            ttk.Label(frm, text=text).grid(row=r, column=0, sticky="w", pady=(4, 0))
+            ttk.Entry(frm, textvariable=var, state="readonly", width=34).grid(
+                row=r, column=1, sticky="ew", padx=(8, 0), pady=(4, 0))
+            b = ttk.Button(frm, text="…", width=3, command=lambda k=kind: self.pick_dir(k))
+            b.grid(row=r, column=2, padx=(4, 0), pady=(4, 0))
+            self.dir_btns.append(b)
+
         btns = ttk.Frame(frm)
-        btns.grid(row=15, column=0, columnspan=3, pady=(12, 0), sticky="ew")
+        btns.grid(row=17, column=0, columnspan=3, pady=(12, 0), sticky="ew")
         self.pick_btn = ttk.Button(frm, text="Transcribe a recording…", command=self.pick_recording)
-        self.pick_btn.grid(row=16, column=0, columnspan=3, pady=(6, 0), sticky="ew")
+        self.pick_btn.grid(row=18, column=0, columnspan=3, pady=(6, 0), sticky="ew")
         self.open_btn = ttk.Button(frm, text="Open last transcription", command=self.open_last)
-        self.open_btn.grid(row=17, column=0, columnspan=3, pady=(6, 0), sticky="ew")
+        self.open_btn.grid(row=19, column=0, columnspan=3, pady=(6, 0), sticky="ew")
 
         # Feedback ("Saved ...", errors, warnings) always at the very bottom, clearly headed
         style = ttk.Style(root)
         style.configure("Status.TLabelframe.Label", font=("Segoe UI", 10, "bold"))
         status_frm = ttk.LabelFrame(frm, text="Status", style="Status.TLabelframe", padding=(8, 4))
-        status_frm.grid(row=18, column=0, columnspan=3, pady=(14, 0), sticky="ew")
+        status_frm.grid(row=20, column=0, columnspan=3, pady=(14, 0), sticky="ew")
         ttk.Label(status_frm, textvariable=self.status, wraplength=345).pack(anchor="w", fill="x")
         # Transcription progress/result: its own line so it never overwrites the recording status
         self.tx_events: "queue.Queue[tuple]" = queue.Queue()   # from the transcription threads
@@ -272,7 +286,7 @@ class App:
         self.tx_status = tk.StringVar(value="")
         self.tx_label = ttk.Label(status_frm, textvariable=self.tx_status, wraplength=345)
         self.log_btn = ttk.Button(frm, text="Open log", command=self.open_log)
-        self.log_btn.grid(row=19, column=0, columnspan=3, pady=(6, 0), sticky="ew")
+        self.log_btn.grid(row=21, column=0, columnspan=3, pady=(6, 0), sticky="ew")
         self.btn = ttk.Button(btns, text="● Start recording", command=self.toggle)
         self.btn.pack(side="left", expand=True, fill="x")
         self.tray_btn = ttk.Button(btns, text="Minimize to tray", command=self.to_tray)
@@ -428,6 +442,8 @@ class App:
         self.refresh_btn.state(["!disabled"] if enabled else ["disabled"])
         self.format_box.config(state="readonly" if enabled and self.can["record"] else "disabled")
         self.chunk_spin.config(state="normal" if enabled and self.can["transcribe"] else "disabled")
+        for b in self.dir_btns:
+            b.state(["!disabled"] if enabled else ["disabled"])
         self.duck_cb.state(["!disabled"] if enabled else ["disabled"])
         if enabled:
             self.update_channel_option()   # enabled only when both sources are on
@@ -463,7 +479,7 @@ class App:
             self.show()
             return
         self.name = clean_name(self.rec_name.get())
-        self.mp3_path = rm.build_name(self.name, FORMATS[self.format.get()])
+        self.mp3_path = rm.build_name(self.name, FORMATS[self.format.get()], self.rec_dir)
         self.cur_log = self.log_path_for(self.mp3_path)
         self.duck_enabled = self.duck.get()   # read here: Tk variables belong to the UI thread
         self.stereo_enabled = self.stereo.get()
@@ -549,7 +565,7 @@ class App:
     def pick_recording(self):
         """Choose an existing audio file (default: the recordings folder) and transcribe it
         with the mode, language and model currently selected in the window."""
-        start = rm.RECORDINGS_DIR if rm.RECORDINGS_DIR.is_dir() else rm.RECORDINGS_DIR.parent
+        start = self.rec_dir if self.rec_dir.is_dir() else self.rec_dir.parent
         chosen = filedialog.askopenfilename(parent=self.root, title="Choose a recording to transcribe",
                                             initialdir=str(start), filetypes=AUDIO_TYPES)
         if not chosen:
@@ -559,10 +575,28 @@ class App:
         self.status.set(f"Selected {path.name}")
         self.launch_transcription(path, name=path.stem)
 
-    @staticmethod
-    def last_transcript() -> Path | None:
+    def pick_dir(self, kind: str):
+        """Choose the folder for recordings (kind 'rec') or transcripts ('tx')."""
+        cur = self.rec_dir if kind == "rec" else self.tx_dir
+        chosen = filedialog.askdirectory(
+            parent=self.root, mustexist=False, title="Choose the folder for " +
+            ("recordings" if kind == "rec" else "transcripts"),
+            initialdir=str(cur if cur.is_dir() else cur.parent))
+        if not chosen:
+            return
+        path = Path(chosen)
+        if kind == "rec":
+            self.rec_dir = path
+            self.rec_dir_var.set(str(path))
+            self.update_log_btn()
+        else:
+            self.tx_dir = path
+            self.tx_dir_var.set(str(path))
+            self.update_open_btn()
+
+    def last_transcript(self) -> Path | None:
         """The newest transcript in the transcripts folder, or None."""
-        files = [f for f in TRANSCRIPT_DIR.glob("*.txt") if f.is_file()] if TRANSCRIPT_DIR.is_dir() else []
+        files = [f for f in self.tx_dir.glob("*.txt") if f.is_file()] if self.tx_dir.is_dir() else []
         return max(files, key=lambda f: f.stat().st_mtime, default=None)
 
     def update_open_btn(self):
@@ -581,10 +615,10 @@ class App:
             self.status.set(f"Could not open {path.name}: {e}")
 
     # ── Log file ────────────────────────────────────────────────────────────────
-    @staticmethod
-    def log_path_for(audio: Path) -> Path:
-        """recordings/<audio name without extension>.log.txt"""
-        return rm.RECORDINGS_DIR / f"{audio.stem}.log.txt"
+    def log_path_for(self, audio: Path) -> Path:
+        """<recordings folder>/<audio name without extension>.log.txt (an existing file picked
+        from elsewhere gets its log in the recordings folder too)"""
+        return self.rec_dir / f"{audio.stem}.log.txt"
 
     def log(self, path: Path | None, text: str):
         """Append a timestamped entry (multi-line text is indented) to a log file."""
@@ -601,7 +635,7 @@ class App:
         self.log_btn.state(["!disabled"])
 
     def newest_log(self) -> Path | None:
-        d = rm.RECORDINGS_DIR
+        d = self.rec_dir
         files = list(d.glob("*.log.txt")) if d.is_dir() else []
         return max(files, key=lambda f: f.stat().st_mtime, default=None)
 
@@ -623,7 +657,8 @@ class App:
         """Transcribe in a hidden background process; progress and result show in the Status box."""
         with_speakers = self.mode.get() == "speakers"
         cmd = rm.transcribe_command(path, name, self.lang.get() or None,
-                                    self.model.get() or None, speakers=with_speakers)
+                                    self.model.get() or None, speakers=with_speakers,
+                                    output_dir=self.tx_dir)
         # Use python.exe (not pythonw.exe): the scripts print their progress to stderr
         cmd[0] = str(Path(sys.executable).with_name("python.exe"))
         self.job_seq += 1
@@ -694,7 +729,7 @@ class App:
         speakers = self.mode.get() == "speakers"
         self.session = {
             "name": self.name or "meeting", "final": self.mp3_path,
-            "combined": TRANSCRIPT_DIR / f"{self.mp3_path.stem}.txt",
+            "tx_dir": self.tx_dir, "combined": self.tx_dir / f"{self.mp3_path.stem}.txt",
             "parts": [], "failed": False, "recording_done": False, "merging": False,
             "speakers": speakers, "lang": self.lang.get() or None, "model": self.model.get() or None,
             "log": self.log_path_for(self.mp3_path),
@@ -725,13 +760,13 @@ class App:
             self.tx_events.put(("part_start", index))
             name = f"{sess['name']}_part{index:02d}"
             cmd = rm.transcribe_command(path, name, sess["lang"], sess["model"],
-                                        speakers=sess["speakers"])
+                                        speakers=sess["speakers"], output_dir=sess["tx_dir"])
             cmd[0] = str(Path(sys.executable).with_name("python.exe"))
             ok, detail = self.run_script(
                 cmd, lambda line, i=index: self.tx_events.put(("part_stage", i, line)))
             text = None
             if ok and detail.endswith(".txt"):
-                tfile = TRANSCRIPT_DIR / detail
+                tfile = sess["tx_dir"] / detail
                 try:
                     text = tfile.read_text(encoding="utf-8").strip()
                     tfile.unlink()                  # its text now lives in the combined file
