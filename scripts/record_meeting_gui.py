@@ -8,6 +8,7 @@ Usage:
     python scripts/record_meeting_gui.py --autostart --tray   # ... and start minimized to tray
 
 Records microphone + system audio with the default devices to recordings/<timestamp>_meeting.mp3.
+The optional "Name" field replaces "meeting" in the file names (e.g. <timestamp>_Budget_review.mp3).
 The window can be minimized to the system tray (the window's minimize button, the
 "Minimize to tray" button, or closing the window while recording).
 Tray icon: red = recording, grey = idle. Right-click for Show / Start / Stop / Quit.
@@ -103,6 +104,14 @@ def tray_image(recording: bool) -> Image.Image:
     return img
 
 
+def clean_name(text: str) -> str | None:
+    """Make free text safe for a file name: spaces -> '_', no characters Windows rejects, no dots
+    (record_meeting.build_name would treat them as an extension). None when nothing is left."""
+    text = re.sub(r'[<>:"/\\|?*.\x00-\x1f]', "", text.strip())
+    text = re.sub(r"\s+", "_", text).strip("_")
+    return text[:80] or None
+
+
 def single_instance() -> bool:
     """True if this is the only running instance (named Windows mutex)."""
     global _mutex
@@ -172,6 +181,14 @@ class App:
         self.sys_var.trace_add("write", self.update_channel_option)
 
         self.status = tk.StringVar(value="Ready")
+
+        # Optional descriptive name, used in the file name: <timestamp>_<name>.mp3
+        self.rec_name = tk.StringVar()
+        name_frm = ttk.Frame(frm)
+        name_frm.grid(row=8, column=0, columnspan=3, sticky="ew", pady=(8, 0))
+        ttk.Label(name_frm, text="Name (optional)").pack(side="left")
+        self.name_entry = ttk.Entry(name_frm, textvariable=self.rec_name)
+        self.name_entry.pack(side="left", fill="x", expand=True, padx=(8, 0))
 
         self.transcribe = tk.BooleanVar(value=True)
         self.transcribe_cb = ttk.Checkbutton(frm, text="Transcribe after stopping",
@@ -410,7 +427,8 @@ class App:
             self.status.set(f"Could not open audio device: {e}")
             self.show()
             return
-        self.mp3_path = rm.build_name(None, FORMATS[self.format.get()])
+        self.name = clean_name(self.rec_name.get())
+        self.mp3_path = rm.build_name(self.name, FORMATS[self.format.get()])
         self.cur_log = self.log_path_for(self.mp3_path)
         self.duck_enabled = self.duck.get()   # read here: Tk variables belong to the UI thread
         self.stereo_enabled = self.stereo.get()
@@ -420,6 +438,7 @@ class App:
         self.elapsed = 0.0
         self.btn.config(text="■ Stop recording")
         self.set_controls(False)
+        self.name_entry.state(["disabled"])
         self.status.set(f"Recording to {self.mp3_path.name}")
         self.thread = threading.Thread(target=self.worker, args=(sources,), daemon=True)
         self.thread.start()
@@ -457,6 +476,7 @@ class App:
         self.peaks = {"mic": 0.0, "sys": 0.0}
         self.btn.config(text="● Start recording")
         self.set_controls(True)
+        self.name_entry.state(["!disabled"])
         path = self.mp3_path
         if res["error"]:
             self.status.set(f"Error: {res['error']}")
@@ -468,7 +488,7 @@ class App:
                 msg += f" — warning: silent source(s): {', '.join(res['silent'])}"
             self.status.set(msg)
             if self.transcribe.get():
-                self.launch_transcription(path)
+                self.launch_transcription(path, name=self.name or "meeting")
         self.refresh_icon()
         if self.quit_after_stop:
             self.quit()
