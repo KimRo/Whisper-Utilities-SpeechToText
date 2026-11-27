@@ -100,4 +100,4 @@ To remove everything again, run `scripts\uninstall.bat`.
 
 ## License
 
-[CC0 1.0 — Public Domain](LICENSE)
+[MIT](LICENSE). Credits and licenses of the packages and models this project uses: [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).
