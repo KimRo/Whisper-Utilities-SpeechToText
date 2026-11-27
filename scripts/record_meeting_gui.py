@@ -171,7 +171,10 @@ class App:
         root.title("Meeting Recorder")
         root.resizable(False, False)
         frm = ttk.Frame(root, padding=12)
-        frm.grid()
+        frm.grid(sticky="nsew")
+        frm.columnconfigure(1, weight=1)               # extra width goes to the middle column
+        self.extra_px = int(round(root.winfo_fpixels("1c")))   # the window is 1 cm wider than its content needs
+        self.frm = frm
 
         self.time_var = tk.StringVar(value="00:00:00")
         ttk.Label(frm, textvariable=self.time_var, font=("Segoe UI", 28)).grid(
@@ -286,13 +289,13 @@ class App:
         style.configure("Status.TLabelframe.Label", font=("Segoe UI", 10, "bold"))
         status_frm = ttk.LabelFrame(frm, text="Status", style="Status.TLabelframe", padding=(8, 4))
         status_frm.grid(row=20, column=0, columnspan=3, pady=(14, 0), sticky="ew")
-        ttk.Label(status_frm, textvariable=self.status, wraplength=345).pack(anchor="w", fill="x")
+        ttk.Label(status_frm, textvariable=self.status, wraplength=345 + self.extra_px).pack(anchor="w", fill="x")
         # Transcription progress/result: its own line so it never overwrites the recording status
         self.tx_events: "queue.Queue[tuple]" = queue.Queue()   # from the transcription threads
         self.jobs: dict[int, dict] = {}
         self.job_seq = 0
         self.tx_status = tk.StringVar(value="")
-        self.tx_label = ttk.Label(status_frm, textvariable=self.tx_status, wraplength=345)
+        self.tx_label = ttk.Label(status_frm, textvariable=self.tx_status, wraplength=345 + self.extra_px)
         self.log_btn = ttk.Button(frm, text="Open log", command=self.open_log)
         self.log_btn.grid(row=21, column=0, columnspan=3, pady=(6, 0), sticky="ew")
         self.btn = ttk.Button(btns, text="● Start recording", command=self.toggle)
@@ -313,6 +316,7 @@ class App:
         if self.can["record"]:
             self.refresh_devices()
         self.attach_persistence()
+        self.widen()
         self.loading = False
         self.poll()
 
@@ -320,6 +324,13 @@ class App:
             self.start()
         if start_in_tray and pystray is not None:
             self.to_tray()
+
+    def widen(self):
+        """Make the window 1 cm wider than its content needs; the extra width goes to the
+        stretching widgets (device lists, folder field, Status box)."""
+        self.root.update_idletasks()
+        spacer = ttk.Frame(self.frm, width=self.frm.winfo_reqwidth() - 24 + self.extra_px, height=1)
+        spacer.grid(row=99, column=0, columnspan=3, sticky="ew")
 
     # ── Saved settings ──────────────────────────────────────────────────────────
     def apply_settings(self, cli: dict):
