@@ -23,22 +23,45 @@ Stop recording with **Enter** or **Ctrl+C**. While recording, the elapsed time a
 | Option | Description |
 |---|---|
 | `-o, --output` | Name part of the file (default: `meeting`) |
-| `--mic ID` | Microphone device id (default: Windows default input) |
-| `--loopback ID` | System-audio device id (default: loopback of the default output device) |
+| `--mic ID\|NAME` | Microphone: device id, (part of) a device name, `default` or `off` (default: Windows default input) |
+| `--loopback ID\|NAME`, `--system` | System audio, same forms (default: loopback of the default output device) |
+| `--output-dir DIR` | Folder for the recording (default: `Documents\Meeting Recorder\Recordings`, see below) |
+| `--transcript-dir DIR` | Folder for the transcript (default: `transcripts`) |
+| `--settings FILE` | Settings file to use (default: `%APPDATA%\WhisperMeetingRecorder\settings.json`, see below) |
 | `--no-mic` | Record system audio only |
 | `--no-system` | Record microphone only |
 | `--format mp3\|wav` | Recording format (default `mp3`): MP3 at 64 kbps, or uncompressed 16 kHz 16-bit WAV (about 4x larger) |
-| `--duck` | Hybrid-meeting mode: lower the microphone while system audio plays (see below) |
-| `--separate-channels` | Stereo MP3 with the microphone on the left and system audio on the right, instead of one mixed channel (see below) |
+| `--duck`, `--no-duck` | Hybrid-meeting mode: lower the microphone while system audio plays (see below) |
+| `--separate-channels`, `--no-separate-channels` | Stereo MP3 with the microphone on the left and system audio on the right, instead of one mixed channel (see below) |
 | `--list-devices` | Print device ids and exit |
 | `--transcribe ask\|yes\|no` | Run `transcribe_file.py` afterwards (default: `ask`) |
 | `-l, --language` | Passed to `transcribe_file.py` |
 | `--model` | Passed to `transcribe_file.py` (default: `medium`) |
 | `--cpu` | Passed to `transcribe_file.py` |
 
+## Default folders
+
+Everything is kept outside the repository, in your Documents folder (as Windows reports it, so a redirected Documents folder is followed):
+
+| What | Default folder |
+|---|---|
+| Recordings and part files | `Documents\Meeting Recorder\Recordings` |
+| Transcripts (including the combined transcript of a split recording) | `Documents\Meeting Recorder\Transcripts` |
+| Log files (`<recording name>.log.txt`) | `Documents\Meeting Recorder\Logs` |
+
+Each can be changed in the GUI ("Audio folder", "Transcript folder", "Log folder" and their "…" buttons; saved as settings) or on the command line (`--output-dir`, `--transcript-dir`, and for the GUI `--log-dir`). Folders are created when needed. Files recorded by earlier versions stay where they were, in `recordings` and `transcripts` inside the repository; they are not moved. The log folder is separate from the audio folder, so logs do not clutter it.
+
 ## Output
 
 Recordings are saved to the repo-root `recordings\` folder as `<YYYY-MM-DD_HH-MM-SS>_<name>.mp3` or `.wav` (chosen with the "Recording" list in the window). MP3 is 16 kHz, mono at 64 kbps, about 30 MB per hour, or stereo at 96 kbps, about 43 MB per hour, with separate channels. WAV is 16 kHz 16-bit uncompressed, about 115 MB per hour mono. Transcripts end up in `transcripts\` as usual.
+
+## Saved settings
+
+The GUI saves every setting as soon as you change it, and both programs read them at start-up, so the next run starts with your last choices. The file is `%APPDATA%\WhisperMeetingRecorder\settings.json` (or the file given with `--settings`); delete it to go back to the defaults. Saved: microphone and system-audio device (by name, so a changed device id does not matter; an unplugged device falls back to the default), hybrid mode, separate channels, transcribe after stopping, mode (normal / with speakers), language, model, recording format, split minutes, audio, transcript and log folder. The recording **name** is per recording and not saved.
+
+**Command-line options always win** over the saved value, for that run only: they are never written to the settings file, so `record_meeting_gui.py --model tiny` does not change your saved model. A boolean option has an opposite form (`--duck` / `--no-duck`) so you can switch off something that was saved on. Priority: command line, then saved setting, then built-in default. Differences between the two programs: `record_meeting.py` only uses the saved devices, format, folders, language, model, duck, separate channels and transcribe (saved on = `yes`, off = `no`, never saved = `ask`); it does not split recordings and has no `--cpu` setting.
+
+Command-line options of the GUI (`record_meeting_gui.py`), all optional: `--autostart`, `--tray`, `--settings FILE`, `--name NAME`, `--mic` / `--system` (`default`, `off` or part of a device name), `--duck` / `--no-duck`, `--separate-channels` / `--no-separate-channels`, `--transcribe` / `--no-transcribe`, `--mode normal|speakers`, `-l/--language`, `--model`, `--format mp3|wav`, `--chunk-minutes 0-60`, `--output-dir`, `--transcript-dir`.
 
 ## GUI and shortcut
 
@@ -47,10 +70,10 @@ Recordings are saved to the repo-root `recordings\` folder as `<YYYY-MM-DD_HH-MM
 - **Devices:** two dropdowns list the detected **microphones** and **system-audio (loopback) devices**. Each defaults to the Windows default device and can be set to *Off*; **Refresh devices** rescans (for example after plugging in a headset). They are locked while recording.
 - **Transcription:** a "Transcribe after stopping" checkbox, language and model pickers (defaults `nl` / `medium`), and a choice between **Normal** and **With speakers** (speaker labels, see [transcribe_speakers.md](transcribe_speakers.md)). Because there is no console, the speaker transcription cannot ask for a Hugging Face token: set `HF_TOKEN` first, otherwise it fails with a message saying so.
 - **Also transcribe while recording, every [5] min (0 = off):** for long meetings. The recording continues without a gap, but every N minutes a new part file (`<name>_part01.mp3`, `_part02`, ...) is started and the finished part is transcribed in the background with the selected mode, language and model. Transcription of a part may take longer than N minutes: parts then wait in a queue (the Status box shows the part being transcribed and how many are waiting). All text goes into **one combined transcript** in `transcripts\<name>.txt`, one `--- Part N (hh:mm:ss - hh:mm:ss) ---` block per part; it grows while you record, so "Open last transcription" works mid-meeting. In *With speakers* mode the `[hh:mm:ss]` stamps are shifted to the time in the whole recording, but each part is diarized separately, so remote speakers may be numbered differently from part to part ("You" stays the same). A word that falls on a part boundary may be split over two parts. When recording has stopped and every part is transcribed, the parts are merged into one recording `<name>.mp3` and the part files are removed; if a part failed to transcribe or the merge failed, the part files are kept. Needs transcription to be available; each part starts a new transcription process, so the model is loaded again per part. Quitting while parts are still queued asks for confirmation; untranscribed parts stay in `recordings`.
-- **Audio folder / Transcript folder:** where recordings (and their `.log.txt` logs) and transcripts are saved; default `recordings` and `transcripts` in the repo. The "…" buttons pick another folder (created if missing; locked while recording). The choice is not remembered between runs. The command line has `--output-dir` and `--transcript-dir` for the same; `transcribe_file.py` and `transcribe_speakers.py` take `--output-dir`.
+- **Audio folder / Transcript folder / Log folder:** where recordings, transcripts and log files are saved; defaults: see *Default folders* above. The "…" buttons pick another folder (created if missing; locked while recording). The command line has `--output-dir` and `--transcript-dir` for the first two (the GUI also `--log-dir`); `transcribe_file.py` and `transcribe_speakers.py` take `--output-dir`.
 - **Transcribe a recording...:** transcribes any existing audio file with the same settings.
 - **Open last transcription:** opens the newest transcript from the `transcripts` folder. It is greyed out while a transcription is running in the background, and when there is no transcript yet.
-- **Log and Open log:** everything shown in the Status box is also written, with timestamps, to `recordings\<recording name>.log.txt` (next to the recording; transcribing an existing file appends to `<that file's name>.log.txt`). "Open log", below the Status box, opens the log of the transcription that is running, or the newest log when none is running.
+- **Log and Open log:** everything shown in the Status box is also written, with timestamps, to `<Log folder>\<recording name>.log.txt` (transcribing an existing file appends to `<that file's name>.log.txt` there). "Open log", below the Status box, opens the log of the transcription that is running, or the newest log when none is running.
 - **Background transcription:** it runs hidden. The **Status** box at the bottom shows the current step and elapsed time, then a green *Transcription finished* line with the saved file name, or a red *Transcription failed* line with the error. When it ends, the window comes to the front again, also from the tray. Several transcriptions can run at once. If you quit the window meanwhile, the transcription keeps running hidden and still saves the transcript.
 - **Tray:** **Minimize to tray**, or the window's own minimize button, hides it in the system tray instead of the taskbar (grey icon = idle, red = recording; right-click for Show / Start / Stop / Quit). Closing the window while recording also moves it to the tray; closing it while idle quits.
 

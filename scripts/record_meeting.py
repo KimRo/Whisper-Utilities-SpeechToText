@@ -18,27 +18,34 @@ Stop recording with Enter or Ctrl+C.
 
 Options:
     -o, --output      Name part of the file (default: meeting). Saved to the
-                      recordings folder as <YYYY-MM-DD_HH-MM-SS>_<name>.mp3 (or .wav)
+                      Recordings folder (Documents/Meeting Recorder/Recordings) as <YYYY-MM-DD_HH-MM-SS>_<name>.mp3 (or .wav)
     --format          mp3 | wav (default: mp3). mp3: 16 kHz, 64 kbps voice; wav: 16 kHz
                       16-bit uncompressed (about 4x larger)
-    --mic ID          Microphone device id (default: Windows default input)
-    --loopback ID     Loopback (system audio) device id (default: default output)
+    --mic ID|NAME     Microphone: device id, (part of) a device name, "default" or "off"
+                      (default: Windows default input)
+    --loopback ID|NAME   Loopback (system audio) device, same forms (alias: --system;
+                      default: default output)
     --no-mic          Do not record the microphone
     --no-system       Do not record system audio
-    --duck            Hybrid meeting: lower the microphone while system audio plays, so
+    --duck / --no-duck   Hybrid meeting: lower the microphone while system audio plays, so
                       remote voices coming out of the room speaker are not recorded twice
-    --separate-channels
+    --separate-channels / --no-separate-channels
                       Stereo MP3: microphone on the left channel, system audio on the right
                       (instead of mixing both to mono). Lets transcribe_speakers.py label
                       your own voice as "You". Needs both a microphone and system audio.
     --output-dir DIR  Folder for the recording (default: the recordings folder)
     --transcript-dir DIR
                       Folder for the transcript (default: the transcripts folder)
+    --settings FILE   Settings file to use (default: %APPDATA%\\WhisperMeetingRecorder\\settings.json)
     --list-devices    Show available devices and exit
     --transcribe      ask | yes | no (default: ask) — run transcribe_file.py afterwards
     -l, --language    Passed to transcribe_file.py
     --model           Passed to transcribe_file.py (default: medium)
     --cpu             Passed to transcribe_file.py
+
+Saved settings: format, devices, duck, separate channels, language, model, transcribe,
+and the output folders are also read from the settings file that the GUI (record_meeting_gui.py)
+maintains. An option given on the command line always wins for that run and is not saved.
 
 Note: only record meetings when all participants know about and agree with it.
 """
@@ -54,6 +61,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+import meeting_settings
 import requirements_check
 
 try:
@@ -65,8 +73,8 @@ try:
 except ImportError:
     np = None
 
-# Repo-root "recordings" folder (same level as "transcripts")
-RECORDINGS_DIR = Path(__file__).resolve().parent.parent / "recordings"
+# Default recordings folder: Documents\Meeting Recorder\Recordings (see meeting_settings)
+RECORDINGS_DIR = meeting_settings.DEFAULT_RECORDINGS   # Documents\Meeting Recorder\Recordings
 SCRIPT_DIR = Path(__file__).resolve().parent
 
 SAMPLE_RATE = 16000        # Whisper's native rate; plenty for speech
@@ -471,6 +479,25 @@ def build_name(requested: str | None, ext: str = "mp3", folder: Path | None = No
     return folder / f"{ts}_{name}.{ext}"
 
 
+def resolve_device(pa, spec, devices: list[dict]) -> tuple[int | None, bool]:
+    """Turn a device setting into (device index or None for the default, off).
+
+    spec: None/"default", "off", a device id (digits) or (part of) a device name.
+    """
+    if spec is None or str(spec).lower() == "default":
+        return None, False
+    if str(spec).lower() == "off":
+        return None, True
+    if str(spec).isdigit():
+        return int(spec), False
+    name = meeting_settings.match_name(str(spec), [d["name"] for d in devices])
+    if name is None:
+        info(f"{_OR}No single device matches '{spec}'; using the default device. "
+             f"Use --list-devices to see the names.{_R}")
+        return None, False
+    return next(int(d["index"]) for d in devices if d["name"] == name), False
+
+
 def ask_yes(prompt: str) -> bool:
     ans = input(f"{_CY}{prompt} [Y/n]: {_R}").strip().lower()
     return ans in ("", "y", "yes", "j", "ja")
@@ -480,26 +507,46 @@ def main() -> None:
     require_recording_packages()
     ap = argparse.ArgumentParser(description="Record microphone + system audio to MP3 or WAV")
     ap.add_argument("-o", "--output")
-    ap.add_argument("--format", choices=["mp3", "wav"], default="mp3")
+    ap.add_argument("--format", choices=["mp3", "wav"])
     ap.add_argument("--output-dir", type=Path, help="folder for the recording (default: recordings)")
     ap.add_argument("--transcript-dir", type=Path,
                     help="folder for the transcript (default: transcripts)")
-    ap.add_argument("--mic", type=int)
-    ap.add_argument("--loopback", type=int)
+    ap.add_argument("--mic")
+    ap.add_argument("--loopback", "--system", dest="loopback")
     ap.add_argument("--no-mic", action="store_true")
     ap.add_argument("--no-system", action="store_true")
-    ap.add_argument("--duck", action="store_true")
-    ap.add_argument("--separate-channels", action="store_true")
+    ap.add_argument("--duck", action=argparse.BooleanOptionalAction)
+    ap.add_argument("--separate-channels", action=argparse.BooleanOptionalAction)
+    ap.add_argument("--settings", type=Path)
     ap.add_argument("--list-devices", action="store_true")
-    ap.add_argument("--transcribe", choices=["ask", "yes", "no"], default="ask")
+    ap.add_argument("--transcribe", choices=["ask", "yes", "no"])
     ap.add_argument("-l", "--language")
-    ap.add_argument("--model", default="medium")
+    ap.add_argument("--model")
     ap.add_argument("--cpu", action="store_true")
     args = ap.parse_args()
 
-    if args.no_mic and args.no_system:
-        fail("Nothing to record: --no-mic and --no-system were both given.")
-    if args.separate_channels and (args.no_mic or args.no_system):
+    # Command line > saved settings > defaults (see meeting_settings)
+    saved = meeting_settings.load(args.settings)
+    pick = lambda key, cli, default: meeting_settings.resolve(key, cli, saved, default)   # noqa: E731
+    args.format = pick("format", args.format, "mp3")
+    args.output_dir = (args.output_dir or
+                       (Path(saved["output_dir"]) if "output_dir" in saved else None))
+    args.transcript_dir = (args.transcript_dir or
+                           (Path(saved["transcript_dir"]) if "transcript_dir" in saved else None))
+    args.duck = pick("duck", args.duck, False)
+    args.separate_channels = pick("separate_channels", args.separate_channels, False)
+    args.language = pick("language", args.language, None)
+    args.model = pick("model", args.model, "medium")
+    if args.transcribe is None:
+        args.transcribe = ({True: "yes", False: "no"}[saved["transcribe"]]
+                           if "transcribe" in saved else "ask")
+    mic_spec = "off" if args.no_mic else pick("mic", args.mic, "default")
+    sys_spec = "off" if args.no_system else pick("system", args.loopback, "default")
+
+    if str(mic_spec).lower() == "off" and str(sys_spec).lower() == "off":
+        fail("Nothing to record: the microphone and the system audio are both off "
+             "(--no-mic / --no-system or the saved settings).")
+    if args.separate_channels and "off" in (str(mic_spec).lower(), str(sys_spec).lower()):
         info(f"{_OR}--separate-channels needs both a microphone and system audio; "
              f"recording mono.{_R}")
         args.separate_channels = False
@@ -517,8 +564,11 @@ def main() -> None:
         pa.terminate()
         return
 
+    mics, loops = list_sources(pa)
+    mic_id, no_mic = resolve_device(pa, mic_spec, mics)
+    loop_id, no_system = resolve_device(pa, sys_spec, loops)
     try:
-        sources = open_sources(pa, args.mic, args.loopback, args.no_mic, args.no_system)
+        sources = open_sources(pa, mic_id, loop_id, no_mic, no_system)
     except Exception as e:
         pa.terminate()
         fail(f"Could not open audio device: {e}\nUse --list-devices to see device ids.")

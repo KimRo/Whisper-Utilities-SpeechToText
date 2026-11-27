@@ -61,6 +61,7 @@ from pathlib import Path
 import logging
 import warnings
 
+import meeting_settings
 import requirements_check
 
 # Known harmless messages from torch/pyannote that only bury the useful output. Each filter
@@ -71,7 +72,7 @@ for _msg in (r"TensorFloat-32 \(TF32\) has been disabled",    # pyannote turns T
     warnings.filterwarnings("ignore", message=_msg)
 
 # Repo-root "transcripts" folder (same location for all scripts)
-TRANSCRIPT_DIR = Path(__file__).resolve().parent.parent / "transcripts"
+TRANSCRIPT_DIR = meeting_settings.DEFAULT_TRANSCRIPTS   # Documents\Meeting Recorder\Transcripts
 
 DIARIZATION_MODEL = "pyannote/speaker-diarization-community-1"
 SAMPLE_RATE = 16000

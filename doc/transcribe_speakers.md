@@ -34,7 +34,7 @@ python scripts/transcribe_speakers.py            # interactive
 | Option | Meaning |
 |---|---|
 | `-l, --language` | Language code (default `nl`) |
-| `-o, --output` | Output base name; always saved in `transcripts/` as `<timestamp>_<name>.txt` |
+| `-o, --output` | Output base name; saved as `<timestamp>_<name>.txt` in `Documents\Meeting Recorder\Transcripts` (or `--output-dir`) |
 | `--model` | Whisper model (default `medium`) |
 | `--cpu` | Force CPU |
 | `--speakers N` | Exact number of speakers (most effective accuracy hint) |

@@ -42,6 +42,7 @@ def _prepare_cuda_dlls() -> None:
 
 _prepare_cuda_dlls()
 
+import meeting_settings  # noqa: E402
 import requirements_check  # noqa: E402
 requirements_check.require("live", "transcribe", tool="transcribe_tts.py")  # clear message, no traceback
 
@@ -69,7 +70,7 @@ _WH  = "\033[97m"  # bright white  — transcript text
 
 # ── Constants ──────────────────────────────────────────────────────────────────
 SAMPLE_RATE = 16000
-TRANSCRIPT_DIR = Path(__file__).resolve().parent.parent / "transcripts"  # repo-root transcripts folder
+TRANSCRIPT_DIR = meeting_settings.DEFAULT_TRANSCRIPTS   # Documents/Meeting Recorder/Transcripts
 LANG_NAMES = {
     "en": "English", "nl": "Dutch",
     "ar": "Arabic",  "zh": "Chinese",  "cs": "Czech",     "da": "Danish",

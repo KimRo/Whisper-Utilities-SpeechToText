@@ -7,7 +7,7 @@ Usage:
     python scripts/record_meeting_gui.py --autostart  # open and start recording at once
     python scripts/record_meeting_gui.py --autostart --tray   # ... and start minimized to tray
 
-Records microphone + system audio with the default devices to recordings/<timestamp>_meeting.mp3.
+Records microphone + system audio with the default devices to the Audio folder as <timestamp>_meeting.mp3 (default Documents/Meeting Recorder/Recordings).
 The optional "Name" field replaces "meeting" in the file names (e.g. <timestamp>_Budget_review.mp3).
 The window can be minimized to the system tray (the window's minimize button, the
 "Minimize to tray" button, or closing the window while recording).
@@ -19,7 +19,7 @@ labels who says what (needs the one-time Hugging Face token, see doc/transcribe_
 "Transcribe a recording..." does the same for any existing audio file you pick (the dialog
 opens in the recordings folder), using the mode, language and model selected in the window.
 The recording format (MP3 or WAV, both 16 kHz mono and sized for voice) is chosen below "Model".
-Everything shown in the Status box is also logged, with timestamps, to recordings/<recording name>.log.txt
+Everything shown in the Status box is also logged, with timestamps, to <Log folder>/<recording name>.log.txt (default Documents/Meeting Recorder/Logs)
 (next to the recording; transcribing an existing file appends to <that file's name>.log.txt).
 "Open log" (below the Status box) opens the log of the running transcription, else the newest log.
 The "Also transcribe while recording, every N min" field (0 = off) splits a long recording into part files
@@ -27,6 +27,11 @@ that are transcribed in the background (queued when slower than real time) into 
 and merges the parts into one recording afterwards (see doc/record_meeting.md).
 "Open last transcription" opens the newest transcript in the transcripts folder; it is greyed
 out while a transcription is running in the background (or when there is no transcript yet).
+
+Every setting changed in the window is saved (%APPDATA%\\WhisperMeetingRecorder\\settings.json) and
+restored next time. Command-line options (--mic, --system, --model, -l, --format, --mode, --duck/--no-duck,
+--chunk-minutes, --output-dir, ... see --help) override the saved values for that run only, without saving
+them. See doc/record_meeting.md.
 
 At start-up the window checks which packages are installed. Options that cannot work are
 greyed out and the Status box lists what is missing (scripts\\install.bat installs it).
@@ -55,6 +60,7 @@ except ImportError:
     Image = ImageDraw = None  # only the tray icon needs Pillow; reported at start-up
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import meeting_settings as ms
 import record_meeting as rm  # importable even when its recording packages are missing
 import requirements_check as rc
 
@@ -70,7 +76,7 @@ DEFAULT_MODEL = "medium"
 OFF = "Off (don't record this source)"
 ANSI = re.compile(r"\x1b\[[0-9;]*m")                     # colour codes in the scripts' output
 STAGES = ("Loading", "Transcribing", "Identifying", "Language")   # progress lines worth showing
-TRANSCRIPT_DIR = rm.RECORDINGS_DIR.parent / "transcripts"   # where the transcribe scripts save
+TRANSCRIPT_DIR = ms.DEFAULT_TRANSCRIPTS   # default folder for transcripts
 TX_COLORS = {"busy": "#555555", "ok": "#1a7f37", "fail": "#c62828"}
 STAMP = re.compile(r"^\[(\d+):(\d\d):(\d\d)\]", re.M)             # "[HH:MM:SS]" at a line start
 MIN_PART = 1.0                                                   # shorter parts are not transcribed
@@ -138,8 +144,11 @@ def single_instance() -> bool:
 
 
 class App:
-    def __init__(self, root: tk.Tk, autostart: bool, start_in_tray: bool):
+    def __init__(self, root: tk.Tk, autostart: bool, start_in_tray: bool,
+                 cli: dict | None = None, settings_path: Path | None = None):
         self.root = root
+        self.settings_path = settings_path             # None = the default settings file
+        self.loading = True                            # True: changes are not saved as settings
         self.cmds: "queue.Queue[str]" = queue.Queue()   # commands from the tray thread
         self.stop_evt = threading.Event()
         self.thread: threading.Thread | None = None
@@ -158,6 +167,7 @@ class App:
         self.chunk_seconds = 0
         self.rec_dir = rm.RECORDINGS_DIR                # where recordings and logs are saved
         self.tx_dir = TRANSCRIPT_DIR                    # where transcripts are saved
+        self.log_dir = ms.DEFAULT_LOGS                  # where the log files are saved
 
         root.title("Meeting Recorder")
         root.resizable(False, False)
@@ -256,9 +266,11 @@ class App:
 
         self.rec_dir_var = tk.StringVar(value=str(self.rec_dir))
         self.tx_dir_var = tk.StringVar(value=str(self.tx_dir))
+        self.log_dir_var = tk.StringVar(value=str(self.log_dir))
         self.dir_btns = []
         for r, (text, var, kind) in enumerate((("Audio folder", self.rec_dir_var, "rec"),
-                                               ("Transcript folder", self.tx_dir_var, "tx")), 15):
+                                               ("Transcript folder", self.tx_dir_var, "tx"),
+                                               ("Log folder", self.log_dir_var, "log")), 15):
             ttk.Label(frm, text=text).grid(row=r, column=0, sticky="w", pady=(4, 0))
             ttk.Entry(frm, textvariable=var, state="readonly", width=34).grid(
                 row=r, column=1, sticky="ew", padx=(8, 0), pady=(4, 0))
@@ -267,17 +279,17 @@ class App:
             self.dir_btns.append(b)
 
         btns = ttk.Frame(frm)
-        btns.grid(row=17, column=0, columnspan=3, pady=(12, 0), sticky="ew")
+        btns.grid(row=18, column=0, columnspan=3, pady=(12, 0), sticky="ew")
         self.pick_btn = ttk.Button(frm, text="Transcribe a recording…", command=self.pick_recording)
-        self.pick_btn.grid(row=18, column=0, columnspan=3, pady=(6, 0), sticky="ew")
+        self.pick_btn.grid(row=19, column=0, columnspan=3, pady=(6, 0), sticky="ew")
         self.open_btn = ttk.Button(frm, text="Open last transcription", command=self.open_last)
-        self.open_btn.grid(row=19, column=0, columnspan=3, pady=(6, 0), sticky="ew")
+        self.open_btn.grid(row=20, column=0, columnspan=3, pady=(6, 0), sticky="ew")
 
         # Feedback ("Saved ...", errors, warnings) always at the very bottom, clearly headed
         style = ttk.Style(root)
         style.configure("Status.TLabelframe.Label", font=("Segoe UI", 10, "bold"))
         status_frm = ttk.LabelFrame(frm, text="Status", style="Status.TLabelframe", padding=(8, 4))
-        status_frm.grid(row=20, column=0, columnspan=3, pady=(14, 0), sticky="ew")
+        status_frm.grid(row=21, column=0, columnspan=3, pady=(14, 0), sticky="ew")
         ttk.Label(status_frm, textvariable=self.status, wraplength=345).pack(anchor="w", fill="x")
         # Transcription progress/result: its own line so it never overwrites the recording status
         self.tx_events: "queue.Queue[tuple]" = queue.Queue()   # from the transcription threads
@@ -286,7 +298,7 @@ class App:
         self.tx_status = tk.StringVar(value="")
         self.tx_label = ttk.Label(status_frm, textvariable=self.tx_status, wraplength=345)
         self.log_btn = ttk.Button(frm, text="Open log", command=self.open_log)
-        self.log_btn.grid(row=21, column=0, columnspan=3, pady=(6, 0), sticky="ew")
+        self.log_btn.grid(row=22, column=0, columnspan=3, pady=(6, 0), sticky="ew")
         self.btn = ttk.Button(btns, text="● Start recording", command=self.toggle)
         self.btn.pack(side="left", expand=True, fill="x")
         self.tray_btn = ttk.Button(btns, text="Minimize to tray", command=self.to_tray)
@@ -296,6 +308,7 @@ class App:
         root.bind("<Unmap>", self.on_unmap)
         self.pa = None
         self.missing, self.can = check_requirements()
+        self.apply_settings(cli or {})
         self.apply_requirements()
         self.update_open_btn()
         self.cur_log: Path | None = None               # log of the activity the Status box shows
@@ -303,12 +316,88 @@ class App:
         self.status.trace_add("write", lambda *_: self.log(self.cur_log, self.status.get()))
         if self.can["record"]:
             self.refresh_devices()
+        self.attach_persistence()
+        self.loading = False
         self.poll()
 
         if autostart:
             self.start()
         if start_in_tray and pystray is not None:
             self.to_tray()
+
+    # ── Saved settings ──────────────────────────────────────────────────────────
+    def apply_settings(self, cli: dict):
+        """Fill the window from the saved settings; values given on the command line (cli) win.
+        Only changes made in the window afterwards are saved, so a command-line value is used
+        for this run without replacing the saved one."""
+        saved = ms.load(self.settings_path)
+        get = lambda key, default: ms.resolve(key, cli.get(key), saved, default)   # noqa: E731
+        self.pref_mic = get("mic", "default")
+        self.pref_sys = get("system", "default")
+        self.duck.set(get("duck", False))
+        self.stereo_pref = get("separate_channels", True)
+        self.stereo.set(self.stereo_pref)
+        self.transcribe.set(get("transcribe", True))
+        self.mode.set(get("mode", "normal"))
+        self.lang.set(get("language", "nl"))
+        self.model.set(get("model", DEFAULT_MODEL))
+        fmt = get("format", "mp3")
+        self.format.set(next((k for k, v in FORMATS.items() if v == fmt), next(iter(FORMATS))))
+        self.chunk_var.set(str(get("chunk_minutes", 5)))
+        self.rec_dir = Path(get("output_dir", str(self.rec_dir)))
+        self.rec_dir_var.set(str(self.rec_dir))
+        self.tx_dir = Path(get("transcript_dir", str(self.tx_dir)))
+        self.tx_dir_var.set(str(self.tx_dir))
+        self.log_dir = Path(get("log_dir", str(self.log_dir)))
+        self.log_dir_var.set(str(self.log_dir))
+        if cli.get("name"):
+            self.rec_name.set(cli["name"])
+
+    def save_setting(self, key: str, value):
+        if not self.loading:
+            ms.save_key(key, value, self.settings_path)
+
+    def device_setting(self, var, mapping) -> str:
+        """What to store for a device box: "default", "off" or the device name."""
+        kind, _ = mapping.get(var.get(), ("default", None))
+        return var.get() if kind == "dev" else kind
+
+    def display_for(self, pref: str, mapping: dict) -> str:
+        """The entry of a device box that a stored setting refers to (else the default entry)."""
+        if pref == "off":
+            return OFF
+        names = [k for k, (kind, _) in mapping.items() if kind == "dev"]
+        found = ms.match_name(pref, names) if pref != "default" else None
+        return found or next(iter(mapping))
+
+    def attach_persistence(self):
+        """Save a setting as soon as the user changes it in the window."""
+        def on_device(var, mapping_name, pref_name, key):
+            def cb(*_):
+                if self.loading:
+                    return
+                value = self.device_setting(var, getattr(self, mapping_name))
+                setattr(self, pref_name, value)
+                self.save_setting(key, value)
+            var.trace_add("write", cb)
+        on_device(self.mic_var, "mic_map", "pref_mic", "mic")
+        on_device(self.sys_var, "sys_map", "pref_sys", "system")
+
+        def simple(var, key, conv):
+            def cb(*_):
+                try:
+                    value = conv(var.get())
+                except (ValueError, tk.TclError):
+                    return                          # half-typed value: not saved
+                self.save_setting(key, value)
+            var.trace_add("write", cb)
+        simple(self.duck, "duck", bool)
+        simple(self.transcribe, "transcribe", bool)
+        simple(self.mode, "mode", str)
+        simple(self.lang, "language", lambda v: v.strip() or None)
+        simple(self.model, "model", lambda v: v.strip() or None)
+        simple(self.format, "format", lambda v: FORMATS[v])
+        simple(self.chunk_var, "chunk_minutes", lambda v: max(0, min(60, int(v))))
 
     # ── Tray ────────────────────────────────────────────────────────────────────
     def ensure_icon(self):
@@ -377,11 +466,15 @@ class App:
         self.sys_map.update({f"{d['name']}": ("dev", int(d["index"])) for d in loops})
         self.sys_map[OFF] = ("off", None)
 
-        for box, var, mapping in ((self.mic_box, self.mic_var, self.mic_map),
-                                  (self.sys_box, self.sys_var, self.sys_map)):
-            box["values"] = list(mapping)
-            if var.get() not in mapping:
-                var.set(next(iter(mapping)))   # first entry = default
+        was_loading, self.loading = self.loading, True      # fallbacks are not user choices
+        try:
+            for box, var, mapping, pref in ((self.mic_box, self.mic_var, self.mic_map, self.pref_mic),
+                                            (self.sys_box, self.sys_var, self.sys_map, self.pref_sys)):
+                box["values"] = list(mapping)
+                if var.get() not in mapping:
+                    var.set(self.display_for(pref, mapping))   # saved choice, else the default
+        finally:
+            self.loading = was_loading
 
     def selected_devices(self) -> dict:
         mic_kind, mic_idx = self.mic_map.get(self.mic_var.get(), ("default", None))
@@ -417,6 +510,7 @@ class App:
 
     def on_stereo_toggle(self):
         self.stereo_pref = self.stereo.get()
+        self.save_setting("separate_channels", self.stereo_pref)
 
     def update_channel_option(self, *_):
         """Keep the 'separate channels' checkbox consistent with the selected sources.
@@ -577,10 +671,10 @@ class App:
 
     def pick_dir(self, kind: str):
         """Choose the folder for recordings (kind 'rec') or transcripts ('tx')."""
-        cur = self.rec_dir if kind == "rec" else self.tx_dir
+        cur = {"rec": self.rec_dir, "tx": self.tx_dir, "log": self.log_dir}[kind]
         chosen = filedialog.askdirectory(
             parent=self.root, mustexist=False, title="Choose the folder for " +
-            ("recordings" if kind == "rec" else "transcripts"),
+            {"rec": "recordings", "tx": "transcripts", "log": "log files"}[kind],
             initialdir=str(cur if cur.is_dir() else cur.parent))
         if not chosen:
             return
@@ -588,10 +682,16 @@ class App:
         if kind == "rec":
             self.rec_dir = path
             self.rec_dir_var.set(str(path))
+            self.save_setting("output_dir", str(path))
+        elif kind == "log":
+            self.log_dir = path
+            self.log_dir_var.set(str(path))
+            self.save_setting("log_dir", str(path))
             self.update_log_btn()
         else:
             self.tx_dir = path
             self.tx_dir_var.set(str(path))
+            self.save_setting("transcript_dir", str(path))
             self.update_open_btn()
 
     def last_transcript(self) -> Path | None:
@@ -616,9 +716,8 @@ class App:
 
     # ── Log file ────────────────────────────────────────────────────────────────
     def log_path_for(self, audio: Path) -> Path:
-        """<recordings folder>/<audio name without extension>.log.txt (an existing file picked
-        from elsewhere gets its log in the recordings folder too)"""
-        return self.rec_dir / f"{audio.stem}.log.txt"
+        """<log folder>/<audio name without extension>.log.txt"""
+        return self.log_dir / f"{audio.stem}.log.txt"
 
     def log(self, path: Path | None, text: str):
         """Append a timestamped entry (multi-line text is indented) to a log file."""
@@ -635,7 +734,7 @@ class App:
         self.log_btn.state(["!disabled"])
 
     def newest_log(self) -> Path | None:
-        d = self.rec_dir
+        d = self.log_dir
         files = list(d.glob("*.log.txt")) if d.is_dir() else []
         return max(files, key=lambda f: f.stat().st_mtime, default=None)
 
@@ -995,14 +1094,42 @@ def main() -> None:
     ap = argparse.ArgumentParser(description="Meeting Recorder GUI")
     ap.add_argument("--autostart", action="store_true", help="start recording immediately")
     ap.add_argument("--tray", action="store_true", help="start minimized to the system tray")
+    ap.add_argument("--settings", type=Path,
+                    help="settings file to use (default: %%APPDATA%%\\WhisperMeetingRecorder\\settings.json)")
+    ap.add_argument("--name", help="name for this recording (not saved)")
+    ap.add_argument("--mic", help='microphone: "default", "off" or (part of) a device name')
+    ap.add_argument("--system", help='system audio: "default", "off" or (part of) a device name')
+    ap.add_argument("--duck", action=argparse.BooleanOptionalAction,
+                    help="hybrid meeting: lower the microphone while remote audio plays")
+    ap.add_argument("--separate-channels", action=argparse.BooleanOptionalAction,
+                    help="keep microphone and system audio on separate channels")
+    ap.add_argument("--transcribe", action=argparse.BooleanOptionalAction,
+                    help="transcribe after stopping")
+    ap.add_argument("--mode", choices=["normal", "speakers"], help="transcription mode")
+    ap.add_argument("-l", "--language", help="transcription language, e.g. nl or en")
+    ap.add_argument("--model", choices=MODELS, help="Whisper model size")
+    ap.add_argument("--format", choices=["mp3", "wav"], help="recording format")
+    ap.add_argument("--chunk-minutes", type=int, choices=range(0, 61), metavar="0-60",
+                    help="transcribe while recording, every N minutes (0 = off)")
+    ap.add_argument("--output-dir", type=Path, help="folder for recordings and logs")
+    ap.add_argument("--transcript-dir", type=Path, help="folder for transcripts")
+    ap.add_argument("--log-dir", type=Path, help="folder for the log files")
     args = ap.parse_args()
+    # Command-line values win over the saved settings for this run and are not saved.
+    cli = {"name": args.name, "mic": args.mic, "system": args.system, "duck": args.duck,
+           "separate_channels": args.separate_channels, "transcribe": args.transcribe,
+           "mode": args.mode, "language": args.language, "model": args.model,
+           "format": args.format, "chunk_minutes": args.chunk_minutes,
+           "output_dir": str(args.output_dir) if args.output_dir else None,
+           "transcript_dir": str(args.transcript_dir) if args.transcript_dir else None,
+           "log_dir": str(args.log_dir) if args.log_dir else None}
 
     if not single_instance():
         ctypes.windll.user32.MessageBoxW(0, "Meeting Recorder is already running "
                                             "(check the system tray).", "Meeting Recorder", 0x40)
         return
     root = tk.Tk()
-    App(root, args.autostart, args.tray)
+    App(root, args.autostart, args.tray, cli, args.settings)
     root.mainloop()
 
 
