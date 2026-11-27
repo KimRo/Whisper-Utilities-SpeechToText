@@ -214,7 +214,7 @@ class App:
         self.stereo_pref = True
         self.stereo = tk.BooleanVar(value=True)
         self.stereo_cb = ttk.Checkbutton(
-            frm, text="Keep mic and system audio on separate channels (to label 'You')",
+            frm, text="Keep mic and system audio on separate channels (labels 'You' / 'External')",
             variable=self.stereo, command=self.on_stereo_toggle)
         self.stereo_cb.grid(row=7, column=0, columnspan=3, sticky="w")
         self.mic_var.trace_add("write", self.update_channel_option)
@@ -901,7 +901,7 @@ class App:
                     tfile.unlink()                  # its text now lives in the combined file
                 except OSError as e:
                     ok, detail = False, f"could not read {detail}: {e}"
-            if ok and text and sess["speakers"]:
+            if ok and text:     # no-op for plain text; shifts "[HH:MM:SS]" stamps (speakers / You-External)
                 text = shift_stamps(text, offset)
             header = f"--- Part {index} ({hms(offset)} - {hms(offset + duration)}) ---"
             body = text if text else ("(no speech)" if ok else f"(transcription failed: {detail})")

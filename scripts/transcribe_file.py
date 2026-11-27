@@ -195,6 +195,74 @@ def transcribe(audio_path: Path, model: WhisperModel, lang: str) -> str:
     return " ".join(s.text.strip() for s in segments).strip()
 
 
+# ── Separate-channel recordings (record_meeting.py --separate-channels) ───────────
+SAMPLE_RATE = 16000
+MIN_CHANNEL_RMS = 0.005   # a channel quieter than this (about -46 dBFS) is treated as silent
+
+
+def is_stereo(audio_path: Path) -> bool:
+    try:
+        import av
+        with av.open(str(audio_path)) as container:
+            return container.streams.audio[0].channels == 2
+    except Exception:
+        return False
+
+
+def load_stereo(audio_path: Path):
+    """Decode to 16 kHz float32 with shape (2, n): row 0 = microphone, row 1 = system audio."""
+    import av
+    import numpy as np
+    chunks = []
+    with av.open(str(audio_path)) as container:
+        resampler = av.AudioResampler(format="fltp", layout="stereo", rate=SAMPLE_RATE)
+        for frame in container.decode(audio=0):
+            for out in resampler.resample(frame):
+                chunks.append(out.to_ndarray())
+        for out in resampler.resample(None):
+            chunks.append(out.to_ndarray())
+    if not chunks:
+        return None
+    return np.concatenate(chunks, axis=1).astype("float32")
+
+
+def stamp(seconds: float) -> str:
+    s = int(seconds)
+    return f"[{s // 3600:02d}:{s % 3600 // 60:02d}:{s % 60:02d}]"
+
+
+def transcribe_channels(audio_path: Path, model: WhisperModel, lang: str,
+                        me: str, others: str) -> str:
+    """Transcribe mic (left) and system audio (right) separately; merge by time, labelled."""
+    import numpy as np
+    print(f"{_CY}Transcribing {_WH}{audio_path.name}{_CY} per channel ({me} / {others}) ...{_R}",
+          file=sys.stderr)
+    audio = load_stereo(audio_path)
+    if audio is None:
+        return ""
+    entries = []   # (start, label, text)
+    for samples, label in ((audio[0], me), (audio[1], others)):
+        rms = float(np.sqrt(np.mean(np.square(samples)))) if samples.size else 0.0
+        if rms < MIN_CHANNEL_RMS:
+            print(f"{_DIM}{label}: channel is silent, skipped.{_R}", file=sys.stderr)
+            continue
+        # vad_filter: skip the silence in this channel, so a channel that only has audio later
+        # on does not get its text stamped at the start (Whisper's timestamps drift over silence)
+        segments, _info = model.transcribe(samples, language=lang, vad_filter=True)
+        for s in segments:
+            text = s.text.strip()
+            if text:
+                entries.append((s.start, label, text))
+    entries.sort(key=lambda e: e[0])
+    lines: list[list] = []   # merge consecutive segments of the same label
+    for start, label, text in entries:
+        if lines and lines[-1][1] == label:
+            lines[-1][2] += " " + text
+        else:
+            lines.append([start, label, text])
+    return "\n".join(f"{stamp(start)} {label}: {text}" for start, label, text in lines)
+
+
 # ── Entry ────────────────────────────────────────────────────────────────────────
 def main() -> None:
     parser = argparse.ArgumentParser(description="Transcribe an audio file with Whisper.")
@@ -211,6 +279,13 @@ def main() -> None:
                         help="Folder to save the transcript in (default: a new subfolder of the output folder)")
     parser.add_argument("--cpu", action="store_true",
                         help="Force CPU inference")
+    parser.add_argument("--dual-channel", choices=["auto", "on", "off"], default="auto",
+                        help="auto (default): a 2-channel file is a --separate-channels recording "
+                             "(left = microphone, right = system audio); each channel is transcribed "
+                             "separately and labelled. off = mix to one unlabeled text")
+    parser.add_argument("--me", default="You", help="Label for the microphone channel (default: You)")
+    parser.add_argument("--others", default="External",
+                        help="Label for the system-audio channel (default: External)")
     args = parser.parse_args()
 
     if args.audio is None:
@@ -225,6 +300,7 @@ def main() -> None:
         output_path = prompt_output(audio_path)
         print()
         force_cpu = False
+        args.dual_channel = "auto"
     else:
         # ── Command-line mode ─────────────────────────────────────────────────
         audio_path = args.audio.resolve()
@@ -243,7 +319,10 @@ def main() -> None:
         force_cpu   = args.cpu
 
     model = load_model(model_name, force_cpu)
-    text  = transcribe(audio_path, model, lang_code)
+    if args.dual_channel != "off" and is_stereo(audio_path):
+        text = transcribe_channels(audio_path, model, lang_code, args.me, args.others)
+    else:
+        text = transcribe(audio_path, model, lang_code)
 
     if not text:
         print(f"{_OR}No speech detected.{_R}", file=sys.stderr)
